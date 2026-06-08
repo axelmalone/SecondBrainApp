@@ -1,0 +1,155 @@
+import { describe, it, expect } from "vitest";
+import { chunkMarkdown } from "../src/grounding/chunk.js";
+import { VectorIndex, cosine } from "../src/grounding/vectorIndex.js";
+import { retrieve, buildContext } from "../src/grounding/retrieve.js";
+import type { Embedder, IndexedChunk } from "../src/grounding/types.js";
+
+const DIM = 64;
+
+/**
+ * Deterministic bag-of-words embedder: hash each lowercased token into one of
+ * DIM buckets and count. Similar text → similar vectors, with no model/network.
+ * Good enough to exercise top-k ranking, the threshold, and the D12 branches.
+ */
+class FakeEmbedder implements Embedder {
+  readonly dimension = DIM;
+  async embed(texts: string[]): Promise<number[][]> {
+    return texts.map((t) => {
+      const v = new Array<number>(DIM).fill(0);
+      for (const tok of t.toLowerCase().match(/[a-z0-9]+/g) ?? []) {
+        let h = 0;
+        for (let i = 0; i < tok.length; i++) h = (h * 31 + tok.charCodeAt(i)) | 0;
+        const bucket = Math.abs(h) % DIM;
+        v[bucket] = (v[bucket] ?? 0) + 1;
+      }
+      return v;
+    });
+  }
+}
+
+/** A throwing embedder to drive the D12 embed-failed branch. */
+class BrokenEmbedder implements Embedder {
+  readonly dimension = DIM;
+  async embed(): Promise<number[][]> {
+    throw new Error("model failed to load");
+  }
+}
+
+async function indexNotes(
+  embedder: Embedder,
+  notes: Record<string, string>
+): Promise<VectorIndex> {
+  const index = new VectorIndex();
+  for (const [path, md] of Object.entries(notes)) {
+    const chunks = chunkMarkdown(path, md);
+    const vectors = await embedder.embed(chunks.map((c) => c.text));
+    const indexed: IndexedChunk[] = chunks.map((c, i) => ({
+      ...c,
+      vector: vectors[i] as number[],
+    }));
+    index.add(indexed);
+  }
+  return index;
+}
+
+describe("chunkMarkdown", () => {
+  it("splits on headings and attaches the nearest heading", () => {
+    const md = "# Title\n\nIntro para.\n\n## Section A\n\nBody of A.\n";
+    const chunks = chunkMarkdown("n.md", md);
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    const a = chunks.find((c) => c.text.includes("Body of A"));
+    expect(a?.heading).toBe("Section A");
+    expect(chunks.every((c) => c.id.startsWith("n.md#"))).toBe(true);
+  });
+
+  it("drops empty notes to zero chunks", () => {
+    expect(chunkMarkdown("n.md", "\n\n   \n")).toEqual([]);
+  });
+});
+
+describe("cosine", () => {
+  it("is 1 for identical direction and 0 for orthogonal", () => {
+    expect(cosine([1, 0], [2, 0])).toBeCloseTo(1);
+    expect(cosine([1, 0], [0, 1])).toBeCloseTo(0);
+    expect(cosine([0, 0], [1, 1])).toBe(0);
+  });
+});
+
+describe("retrieve (D9 happy path)", () => {
+  it("returns the most relevant note's chunk first, with an injection", async () => {
+    const embedder = new FakeEmbedder();
+    const index = await indexNotes(embedder, {
+      "cooking.md": "# Pasta\n\nBoil water and add salt before the pasta.",
+      "finance.md": "# Budget\n\nTrack monthly spending in a spreadsheet.",
+    });
+
+    const res = await retrieve(embedder, index, "how do I cook pasta in water", {
+      k: 3,
+      minScore: 0.01,
+    });
+
+    expect(res.status).toBe("grounded");
+    if (res.status !== "grounded") return;
+    expect(res.chunks[0]?.notePath).toBe("cooking.md");
+    expect(res.injected).toContain("Boil water");
+    expect(res.injected).toContain("VAULT EXCERPTS");
+  });
+});
+
+describe("retrieve (D12 visible-fail contract)", () => {
+  it("empty index → unavailable: empty-index", async () => {
+    const res = await retrieve(new FakeEmbedder(), new VectorIndex(), "anything");
+    expect(res).toEqual({ status: "unavailable", reason: "empty-index" });
+  });
+
+  it("a throwing embedder → unavailable: embed-failed (never throws)", async () => {
+    // Index built with the working embedder so it is non-empty…
+    const index = await indexNotes(new FakeEmbedder(), { "a.md": "hello world" });
+    // …but the query embedding fails.
+    const res = await retrieve(new BrokenEmbedder(), index, "hello");
+    expect(res).toEqual({ status: "unavailable", reason: "embed-failed" });
+  });
+
+  it("all matches below threshold → unavailable: no-matches", async () => {
+    const embedder = new FakeEmbedder();
+    const index = await indexNotes(embedder, {
+      "a.md": "quantum chromodynamics lattice gauge theory",
+    });
+    const res = await retrieve(embedder, index, "banana smoothie recipe", {
+      minScore: 0.5,
+    });
+    expect(res).toEqual({ status: "unavailable", reason: "no-matches" });
+  });
+});
+
+describe("VectorIndex.replaceNote", () => {
+  it("swaps a note's chunks without touching others", async () => {
+    const embedder = new FakeEmbedder();
+    const index = await indexNotes(embedder, {
+      "a.md": "alpha content here",
+      "b.md": "beta content here",
+    });
+    const sizeBefore = index.size;
+
+    const newChunks = chunkMarkdown("a.md", "alpha rewritten entirely new text");
+    const vectors = await embedder.embed(newChunks.map((c) => c.text));
+    index.replaceNote(
+      "a.md",
+      newChunks.map((c, i) => ({ ...c, vector: vectors[i] as number[] }))
+    );
+
+    expect(index.size).toBe(sizeBefore - 1 + newChunks.length);
+    const res = await retrieve(embedder, index, "beta content", { minScore: 0.01 });
+    expect(res.status).toBe("grounded");
+  });
+});
+
+describe("buildContext", () => {
+  it("labels chunks with path and heading", () => {
+    const out = buildContext([
+      { id: "n#0", notePath: "n.md", heading: "Goals", text: "ship M1", score: 0.9 },
+    ]);
+    expect(out).toContain("n.md › Goals");
+    expect(out).toContain("ship M1");
+  });
+});
