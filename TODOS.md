@@ -230,3 +230,11 @@
 
 ### Which game: indie vs venture
 - Make this explicit before raising or hiring. Founder decision, not a build task
+
+### Deferred design polish (from /design-review 2026-06-08)
+- **FINDING-004 — sub-44px hit targets:** ☰ ⋯ + Key Index send all fall under the 44px
+  touch guideline. Low priority on a mouse-driven desktop app; nudge ⋯/+ up if a
+  touch/trackpad-heavy audience emerges. Polish.
+- **FINDING-005 — native `<select>` model picker:** off the custom-pill aesthetic of the
+  adjacent segmented control. A custom listbox is a larger change for marginal gain. Polish.
+- (Fixed same session: composer placeholder clip 001, editor focus ring 002, button font 003.)
