@@ -54,6 +54,29 @@ describe("GroundingService.indexVault", () => {
     expect(counts.notes).toBe(2); // a.md + b.markdown; .obsidian and .txt skipped
     expect(svc.status().ready).toBe(true);
   });
+
+  it("batches embed calls across notes and reports complete progress", async () => {
+    const notes: Record<string, string> = {};
+    for (let i = 0; i < 40; i++) notes[`n${i}.md`] = `note number ${i} content`;
+    vault = await makeVault(notes);
+
+    const embedder = new FakeEmbedder();
+    const svc = new GroundingService(embedder);
+    const counts = await svc.indexVault(vault);
+
+    expect(counts.notes).toBe(40);
+    // 40 single-chunk notes embedded in batches of 32 → 2 calls, not 40.
+    expect(embedder.calls).toBeLessThanOrEqual(2);
+
+    // Progress is fully accounted for and matches the indexed chunk count.
+    const s = svc.status();
+    expect(s.total).toBe(s.chunks);
+    expect(s.processed).toBe(s.total);
+
+    // Semantics preserved: retrieval still finds the right note.
+    const res = await svc.ground("note number 7 content");
+    expect(res.status).toBe("grounded");
+  });
 });
 
 describe("GroundingService incremental re-index (D2)", () => {

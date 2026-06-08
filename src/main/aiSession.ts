@@ -225,7 +225,7 @@ export async function aiSend(
 
 export function aiGroundingStatus(): GroundingStatus {
   if (!grounder) {
-    return { ready: false, indexing: false, notes: 0, chunks: 0 };
+    return { ready: false, indexing: false, notes: 0, chunks: 0, processed: 0, total: 0 };
   }
   return grounder.status();
 }
