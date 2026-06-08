@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import type {
+  AcceptanceStats,
   ProposalDraft,
   ProposalState,
   StoredProposal,
@@ -134,6 +135,29 @@ export class ProposalStore {
     await this.append({ t: "applied", id, ts: Date.now(), appliedPath });
   }
 
+  /**
+   * Acceptance-rate tally over the full history (active ⊎ archive) — the gate
+   * instrument. `acceptanceRate` = approved / (approved + rejected).
+   */
+  async acceptanceStats(): Promise<AcceptanceStats> {
+    const all = await this.history();
+    const approved = all.filter((p) => p.state === "applied").length;
+    const rejected = all.filter((p) => p.state === "rejected").length;
+    const edited = all.filter((p) => p.edited).length;
+    const pending = all.filter(
+      (p) => p.state === "pending" || p.state === "stale" || p.state === "applying"
+    ).length;
+    const decided = approved + rejected;
+    return {
+      proposed: all.length,
+      approved,
+      edited,
+      rejected,
+      pending,
+      acceptanceRate: decided === 0 ? 0 : approved / decided,
+    };
+  }
+
   /** All proposals, folded, newest-updated first. */
   async list(): Promise<StoredProposal[]> {
     const folded = await this.fold(this.activeFile);
@@ -240,6 +264,7 @@ export class ProposalStore {
           if (!p) break;
           p.draft = ev.draft;
           p.state = "pending"; // a fresh edit clears staleness
+          p.edited = true;
           p.updatedAt = ev.ts;
           break;
         }

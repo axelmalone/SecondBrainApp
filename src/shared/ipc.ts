@@ -13,6 +13,7 @@ import type {
   ProviderId,
 } from "./ai.js";
 import type { ChatSession, ChatSummary, StoredMessage } from "./chat.js";
+import type { AcceptanceStats, ApplyResult, StoredProposal } from "./proposal.js";
 
 export type {
   AiIndexResult,
@@ -24,6 +25,7 @@ export type {
   GroundingStatus,
 } from "./ai.js";
 export type { ChatSession, ChatSummary, StoredMessage } from "./chat.js";
+export type { AcceptanceStats, ApplyResult, StoredProposal } from "./proposal.js";
 
 export type ConflictResolution = "keep-mine" | "take-theirs" | "keep-both";
 
@@ -88,6 +90,20 @@ export interface SecondBrainAPI {
   aiGroundingStatus(): Promise<GroundingStatus>;
   /** Re-index the vault for grounding. Triggers the local embedding model. */
   aiIndexVault(): Promise<AiIndexResult>;
+
+  // ---- Write-back review queue (the proposal loop) ----
+  /** Every proposal, folded, newest-updated first. */
+  proposalList(): Promise<StoredProposal[]>;
+  /** Apply (approve) a proposal through the guarded safe-write layer. */
+  proposalApprove(id: string): Promise<ApplyResult>;
+  /** Reject a proposal (records the decision; nothing is written). */
+  proposalReject(id: string): Promise<void>;
+  /** Replace a proposal's content with the user's edited text (resets to pending). */
+  proposalEdit(id: string, content: string): Promise<StoredProposal | null>;
+  /** Explicit keep-both: write the proposal to a sibling, leave the target intact. */
+  proposalKeepBoth(id: string): Promise<ApplyResult>;
+  /** Acceptance-rate tally (proposed/approved/edited/rejected) — the gate signal. */
+  proposalStats(): Promise<AcceptanceStats>;
 
   /** Durable multi-chat store (D14), one append-only file per chat. */
   chatList(): Promise<ChatSummary[]>;

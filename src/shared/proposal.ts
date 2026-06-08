@@ -64,6 +64,38 @@ export interface StoredProposal {
   appliedPath?: string;
   /** Human-facing note: staleness reason, apply outcome, etc. */
   note?: string;
+  /** True once the user edited the proposed text before deciding (UI badge + stats). */
+  edited?: boolean;
+}
+
+/** The outcome of approving (applying) a proposal — crosses IPC to the queue. */
+export type ApplyResult =
+  | { status: "applied"; appliedPath: string }
+  // The target drifted / collided / lost its anchor: the proposal was NOT
+  // written; it is recomputed against current disk and must be re-reviewed (4C).
+  | {
+      status: "needs-review";
+      reason: "stale" | "collision" | "anchor-missing";
+      proposal: StoredProposal;
+    }
+  | { status: "deleted" }
+  | { status: "renamed" }
+  | { status: "invalid" } // path failed the isInside(root)+.md security check
+  | { status: "error"; message: string };
+
+/**
+ * The acceptance-rate gate instrument — the actual 2-week-trust signal, tallied
+ * from proposals.jsonl (active ⊎ archive). `edited` counts proposals the user
+ * changed before approving; it is a subset of `approved`-eligible activity.
+ */
+export interface AcceptanceStats {
+  proposed: number;
+  approved: number;
+  edited: number;
+  rejected: number;
+  pending: number;
+  /** approved / (approved + rejected), 0 when no decisions yet. */
+  acceptanceRate: number;
 }
 
 // ---- The propose tool (tool-use path) ----

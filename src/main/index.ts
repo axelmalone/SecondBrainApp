@@ -13,9 +13,12 @@ import {
   reindexNote,
   removeNoteFromIndex,
   resetGrounding,
+  setProposalSink,
 } from "./aiSession.js";
 import { VaultWatcher } from "./vaultWatcher.js";
 import { listTree, isInside } from "./vaultFiles.js";
+import { ProposalStore } from "./proposalStore.js";
+import { ProposalSession } from "./proposalSession.js";
 import {
   chatAppend,
   chatCreate,
@@ -37,6 +40,16 @@ const DEFAULT_VAULT = path.join(os.homedir(), "Claude");
 let vaultConfigPath = "";
 let vaultRoot: string | null = null;
 let watcher: VaultWatcher | null = null;
+let proposals: ProposalSession | null = null;
+
+/** Shared post-write side effects: suppress the watcher's own-write event and
+ *  re-index the note. Used by both the editor save path and proposal apply. */
+function afterWrite(paths: string[]): void {
+  for (const p of paths) {
+    watcher?.markSelfWrite(p);
+    void reindexNote(p);
+  }
+}
 
 function vaultInfo(): VaultInfo {
   return { root: vaultRoot, name: vaultRoot ? path.basename(vaultRoot) : null };
@@ -77,7 +90,12 @@ function startWatcher(root: string): void {
   watcher?.stop();
   watcher = new VaultWatcher({
     root,
-    onChanged: (p) => void reindexNote(p),
+    onChanged: (p) => {
+      void reindexNote(p);
+      // Proactive staleness (4C): a note changing on disk may stale a pending
+      // proposal that targets it. Self-writes are already suppressed above.
+      void proposals?.onVaultDirty(p);
+    },
     onRemoved: (p) => removeNoteFromIndex(p),
   });
   watcher.start();
@@ -170,6 +188,32 @@ function registerIpc(): void {
       : { ok: false as const, message: "no vault selected" }
   );
 
+  ipcMain.handle("proposal:list", () => proposals?.list() ?? []);
+  ipcMain.handle("proposal:approve", (_e, id: string) =>
+    proposals
+      ? proposals.approve(id)
+      : { status: "error" as const, message: "proposals unavailable" }
+  );
+  ipcMain.handle("proposal:reject", (_e, id: string) => proposals?.reject(id));
+  ipcMain.handle("proposal:edit", (_e, id: string, content: string) =>
+    proposals ? proposals.edit(id, content) : null
+  );
+  ipcMain.handle("proposal:keepBoth", (_e, id: string) =>
+    proposals
+      ? proposals.keepBoth(id)
+      : { status: "error" as const, message: "proposals unavailable" }
+  );
+  ipcMain.handle("proposal:stats", () =>
+    proposals?.stats() ?? {
+      proposed: 0,
+      approved: 0,
+      edited: 0,
+      rejected: 0,
+      pending: 0,
+      acceptanceRate: 0,
+    }
+  );
+
   ipcMain.handle("chat:list", () => chatList());
   ipcMain.handle("chat:create", () => chatCreate());
   ipcMain.handle("chat:load", (_e, id: string) => chatLoad(id));
@@ -194,6 +238,21 @@ app.whenReady().then(async () => {
   // Durable multi-chat store (D14): app-private, OUTSIDE the vault.
   initChats(path.join(app.getPath("userData"), "chats"));
 
+  // Write-back review queue: app-private proposals.jsonl, OUTSIDE the vault.
+  const proposalStore = new ProposalStore(
+    path.join(app.getPath("userData"), "proposals")
+  );
+  proposals = new ProposalSession({
+    store: proposalStore,
+    getRoot: () => vaultRoot,
+    onApplied: afterWrite,
+  });
+  // A parsed proposal from a chat turn is persisted here (and security-checked).
+  setProposalSink((draft, backref) => proposals!.create(draft, backref));
+  // 7A crash recovery + 1A compaction: verify-then-reconcile any interrupted
+  // apply, then archive resolved proposals. Never throws → never blocks launch.
+  await proposals.recoverOnLaunch().catch(() => {});
+
   // Resolve the active vault: only an EXPLICIT prior choice is restored. We no
   // longer silently adopt ~/Claude — a user with no chosen vault is shown the
   // first-launch popup and picks one explicitly (the picker still defaults to
@@ -206,12 +265,7 @@ app.whenReady().then(async () => {
   // Incremental re-index (D2 + D6): external edits flow through the watcher;
   // the app's own saves re-index directly and suppress the duplicate event.
   if (vaultRoot) startWatcher(vaultRoot);
-  setOnSaved((paths) => {
-    for (const p of paths) {
-      watcher?.markSelfWrite(p);
-      void reindexNote(p);
-    }
-  });
+  setOnSaved(afterWrite);
 
   registerIpc();
   createWindow();
