@@ -5,7 +5,7 @@
   "description": "AI-native, local-first second brain — M1 vault I/O layer",
   "main": "dist/main/index.js",
   "scripts": {
-    "build": "tsc -p tsconfig.main.json && tsc -p tsconfig.renderer.json && cp src/renderer/index.html dist/renderer/index.html && mkdir -p dist/renderer/fonts && cp src/renderer/fonts/*.woff2 dist/renderer/fonts/",
+    "build": "tsc -p tsconfig.renderer.json && tsc -p tsconfig.main.json && cp src/renderer/index.html dist/renderer/index.html && mkdir -p dist/renderer/fonts && cp src/renderer/fonts/*.woff2 dist/renderer/fonts/",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
