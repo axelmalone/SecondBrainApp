@@ -8,264 +8,211 @@
     />
     <title>Second Brain</title>
     <style>
+      /* ===========================================================
+         "Cards" — softer, consumer, Apple-like. Grouped cards float
+         on a tinted canvas. Light/dark adaptive. Grounding is always
+         on; a calm status line + per-answer badges report honestly.
+         =========================================================== */
       :root {
         color-scheme: light dark;
-        font-family: -apple-system, system-ui, sans-serif;
+        --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui,
+          sans-serif;
+        --mono: ui-monospace, "SF Mono", Menlo, monospace;
+        --accent: #007aff;
+        --canvas: #eef0f4;
+        --card: #ffffff;
+        --text: #1d1d1f;
+        --text-2: #6e6e73;
+        --text-3: #a1a1a6;
+        --hair: rgba(0, 0, 0, 0.07);
+        --hover: rgba(0, 0, 0, 0.045);
+        --sel: rgba(0, 122, 255, 0.1);
+        --bubble: #f2f3f7;
+        --green: #34c759;
+        --amber: #ff9500;
+        --shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 8px 24px rgba(0, 0, 0, 0.05);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --accent: #0a84ff;
+          --canvas: #121214;
+          --card: #1f1f22;
+          --text: #f5f5f7;
+          --text-2: #a1a1a6;
+          --text-3: #6e6e73;
+          --hair: rgba(255, 255, 255, 0.08);
+          --hover: rgba(255, 255, 255, 0.06);
+          --sel: rgba(10, 132, 255, 0.2);
+          --bubble: #2b2b2e;
+          --shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 8px 28px rgba(0, 0, 0, 0.3);
+        }
+      }
+      * {
+        box-sizing: border-box;
       }
       body {
         margin: 0;
+        font-family: var(--font);
+        color: var(--text);
+        background: var(--canvas);
+        height: 100vh;
         display: flex;
         flex-direction: column;
-        height: 100vh;
+        font-size: 13px;
+        -webkit-font-smoothing: antialiased;
       }
-      header {
+
+      /* top bar */
+      .bar {
+        height: 50px;
         display: flex;
         align-items: center;
-        gap: 12px;
-        padding: 10px 14px;
-        border-bottom: 1px solid rgba(128, 128, 128, 0.3);
+        gap: 10px;
+        padding: 0 18px;
+        flex-shrink: 0;
       }
-      header .path {
-        font-size: 12px;
-        opacity: 0.7;
-        margin-left: auto;
-        max-width: 50%;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+      .bar .brand {
+        font-weight: 700;
+        font-size: 14px;
+        letter-spacing: -0.01em;
       }
-      button {
+      .bar .spacer {
+        flex: 1;
+      }
+      .pill {
+        height: 30px;
+        padding: 0 14px;
+        border-radius: 999px;
+        border: none;
+        background: var(--card);
+        color: var(--text);
         font: inherit;
-        padding: 6px 12px;
-        border-radius: 6px;
-        border: 1px solid rgba(128, 128, 128, 0.4);
-        background: transparent;
+        font-size: 13px;
         cursor: pointer;
+        box-shadow: var(--shadow);
       }
-      button:disabled {
-        opacity: 0.4;
+      .pill:disabled {
+        opacity: 0.45;
         cursor: default;
       }
-      select,
-      input[type="text"],
-      input[type="password"] {
-        font: inherit;
-        padding: 5px 8px;
-        border-radius: 6px;
-        border: 1px solid rgba(128, 128, 128, 0.4);
-        background: transparent;
-        color: inherit;
+      .pill.primary {
+        background: var(--accent);
+        color: #fff;
       }
-      #main {
+
+      /* three-card grid */
+      .grid {
         flex: 1;
-        display: flex;
+        display: grid;
+        grid-template-columns: 220px 1fr 360px;
+        gap: 16px;
+        padding: 0 16px 14px;
         min-height: 0;
       }
-      #left {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        min-width: 0;
-        border-right: 1px solid rgba(128, 128, 128, 0.3);
-      }
-      #editor {
-        flex: 1;
-        border: none;
-        outline: none;
-        resize: none;
-        padding: 16px;
-        font-family: ui-monospace, "SF Mono", Menlo, monospace;
-        font-size: 14px;
-        line-height: 1.5;
-        background: transparent;
-        color: inherit;
-      }
-      #chat {
-        width: 400px;
+      .card {
+        background: var(--card);
+        border-radius: 16px;
+        box-shadow: var(--shadow);
         display: flex;
         flex-direction: column;
         min-height: 0;
+        overflow: hidden;
       }
-      #chats-bar {
+      .card .ch {
+        padding: 14px 16px 8px;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text-2);
         display: flex;
         align-items: center;
-        gap: 8px;
-        padding: 8px 10px;
-        border-bottom: 1px solid rgba(128, 128, 128, 0.3);
       }
-      #chats-bar #chats-label {
-        font-size: 12px;
-        opacity: 0.6;
+      .card .ch .add {
         margin-left: auto;
+        border: none;
+        background: transparent;
+        color: var(--accent);
+        font-size: 19px;
+        line-height: 1;
+        cursor: pointer;
       }
-      #chat-list {
-        max-height: 132px;
+
+      /* chats card */
+      .chats {
         overflow-y: auto;
-        border-bottom: 1px solid rgba(128, 128, 128, 0.3);
+        padding: 0 8px 10px;
       }
       .chat-item {
         display: flex;
         align-items: center;
         gap: 6px;
-        padding: 6px 10px;
-        font-size: 13px;
+        padding: 9px 11px;
+        border-radius: 11px;
         cursor: pointer;
+        margin-bottom: 3px;
       }
       .chat-item:hover {
-        background: rgba(128, 128, 128, 0.1);
+        background: var(--hover);
       }
       .chat-item.active {
-        background: rgba(80, 130, 255, 0.16);
+        background: var(--sel);
       }
       .chat-item .title {
         flex: 1;
         min-width: 0;
+        font-size: 13px;
+        font-weight: 500;
+        white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-        white-space: nowrap;
       }
       .chat-item .del {
         border: none;
         background: transparent;
-        opacity: 0.4;
-        padding: 0 4px;
-        font-size: 15px;
+        color: var(--text-3);
+        opacity: 0;
+        padding: 0 2px;
+        font-size: 16px;
         line-height: 1;
-      }
-      .chat-item .del:hover {
-        opacity: 1;
-      }
-      #chat-bar {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 8px 10px;
-        border-bottom: 1px solid rgba(128, 128, 128, 0.3);
-      }
-      #chat-bar #model {
-        flex: 1;
-        min-width: 0;
-      }
-      #settings {
-        display: none;
-        flex-direction: column;
-        gap: 8px;
-        padding: 10px;
-        background: rgba(128, 128, 128, 0.08);
-        border-bottom: 1px solid rgba(128, 128, 128, 0.3);
-      }
-      #settings.show {
-        display: flex;
-      }
-      #ground-bar {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 6px 10px;
-        font-size: 13px;
-        border-bottom: 1px solid rgba(128, 128, 128, 0.3);
-      }
-      #ground-bar label {
-        display: flex;
-        align-items: center;
-        gap: 5px;
         cursor: pointer;
       }
-      #ground-state {
-        margin-left: auto;
-        font-size: 12px;
-        opacity: 0.7;
+      .chat-item:hover .del {
+        opacity: 1;
       }
-      .badge {
-        display: inline-block;
-        margin-top: 6px;
-        padding: 2px 7px;
-        border-radius: 999px;
-        font-size: 11px;
+
+      /* editor card */
+      .ed-meta {
+        padding: 16px 22px 0;
+        color: var(--text-3);
+        font-size: 11.5px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
-      .badge.grounded {
-        background: rgba(60, 170, 90, 0.22);
-      }
-      .badge.ungrounded {
-        background: rgba(220, 160, 0, 0.22);
-      }
-      #settings .row {
-        display: flex;
-        gap: 8px;
-      }
-      #settings .row input {
+      .editor {
         flex: 1;
-      }
-      #key-state {
-        font-size: 12px;
-        opacity: 0.7;
-      }
-      #messages {
-        flex: 1;
-        overflow-y: auto;
-        padding: 12px;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-      }
-      .msg {
-        padding: 8px 11px;
-        border-radius: 10px;
-        max-width: 88%;
-        white-space: pre-wrap;
-        word-wrap: break-word;
-        font-size: 14px;
-        line-height: 1.45;
-      }
-      .msg.user {
-        align-self: flex-end;
-        background: rgba(80, 130, 255, 0.18);
-      }
-      .msg.assistant {
-        align-self: flex-start;
-        background: rgba(128, 128, 128, 0.16);
-      }
-      .msg.error {
-        align-self: flex-start;
-        background: rgba(220, 60, 60, 0.16);
-        font-size: 13px;
-      }
-      .msg .usage {
-        display: block;
-        margin-top: 5px;
-        font-size: 11px;
-        opacity: 0.6;
-      }
-      #composer {
-        display: flex;
-        gap: 8px;
-        padding: 10px;
-        border-top: 1px solid rgba(128, 128, 128, 0.3);
-      }
-      #prompt {
-        flex: 1;
+        border: none;
+        outline: none;
         resize: none;
-        font: inherit;
+        padding: 12px 24px 24px;
+        font-family: var(--mono);
         font-size: 14px;
-        padding: 8px;
-        border-radius: 8px;
-        border: 1px solid rgba(128, 128, 128, 0.4);
+        line-height: 1.6;
         background: transparent;
-        color: inherit;
+        color: var(--text);
       }
-      #status {
-        padding: 6px 14px;
-        font-size: 12px;
-        border-top: 1px solid rgba(128, 128, 128, 0.3);
-        min-height: 18px;
+      .editor:disabled {
+        color: var(--text-3);
       }
+
+      /* conflict panel (inside editor card) */
       #conflict {
         display: none;
         flex-direction: column;
         gap: 8px;
+        margin: 0 14px 14px;
         padding: 12px 14px;
-        background: rgba(220, 160, 0, 0.12);
-        border-top: 1px solid rgba(220, 160, 0, 0.5);
+        border-radius: 12px;
+        background: rgba(255, 149, 0, 0.12);
       }
       #conflict.show {
         display: flex;
@@ -274,24 +221,309 @@
         display: flex;
         gap: 8px;
       }
+      #conflict button {
+        font: inherit;
+        font-size: 12px;
+        padding: 6px 12px;
+        border-radius: 8px;
+        border: 1px solid var(--hair);
+        background: var(--card);
+        color: var(--text);
+        cursor: pointer;
+      }
+
+      /* chat card */
+      .chat-top {
+        padding: 12px 14px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        border-bottom: 1px solid var(--hair);
+      }
+      .segmented {
+        display: inline-flex;
+        background: var(--hover);
+        border-radius: 9px;
+        padding: 2px;
+        flex-shrink: 0;
+      }
+      .segmented button {
+        border: none;
+        background: transparent;
+        font: inherit;
+        font-size: 12px;
+        padding: 5px 10px;
+        border-radius: 7px;
+        color: var(--text-2);
+        cursor: pointer;
+      }
+      .segmented button.on {
+        background: var(--card);
+        color: var(--text);
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+      }
+      #model {
+        flex: 1;
+        min-width: 0;
+        font: inherit;
+        font-size: 12px;
+        padding: 6px 9px;
+        border-radius: 8px;
+        border: 1px solid var(--hair);
+        background: var(--canvas);
+        color: var(--text);
+        outline: none;
+      }
+      #model:focus {
+        border-color: var(--accent);
+      }
+      .key-btn {
+        flex-shrink: 0;
+        border: none;
+        background: transparent;
+        color: var(--text-2);
+        font: inherit;
+        font-size: 12px;
+        padding: 6px 8px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      .key-btn:hover {
+        background: var(--hover);
+        color: var(--text);
+      }
+
+      /* settings panel */
+      #settings {
+        display: none;
+        flex-direction: column;
+        gap: 8px;
+        padding: 12px 14px;
+        background: var(--hover);
+        border-bottom: 1px solid var(--hair);
+      }
+      #settings.show {
+        display: flex;
+      }
+      #settings .row {
+        display: flex;
+        gap: 8px;
+      }
+      #key-state {
+        font-size: 12px;
+        color: var(--text-2);
+      }
+      #key-input {
+        flex: 1;
+        font: inherit;
+        font-size: 13px;
+        padding: 7px 10px;
+        border-radius: 8px;
+        border: 1px solid var(--hair);
+        background: var(--card);
+        color: var(--text);
+        outline: none;
+      }
+      #key-input:focus {
+        border-color: var(--accent);
+      }
+      #key-save {
+        border: none;
+        background: var(--accent);
+        color: #fff;
+        font: inherit;
+        font-size: 12px;
+        padding: 7px 12px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+
+      /* grounding status line (always on — no toggle) */
+      .ground {
+        padding: 9px 16px;
+        font-size: 12px;
+        color: var(--text-2);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        border-bottom: 1px solid var(--hair);
+      }
+      .ground .gdot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--text-3);
+        flex-shrink: 0;
+      }
+      .ground .gdot.on {
+        background: var(--green);
+      }
+      #ground-state {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #index-btn {
+        flex-shrink: 0;
+        border: none;
+        background: transparent;
+        color: var(--accent);
+        font: inherit;
+        font-size: 12px;
+        padding: 4px 8px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      #index-btn:hover {
+        background: var(--hover);
+      }
+      #index-btn.cta {
+        background: var(--accent);
+        color: #fff;
+      }
+      #index-btn:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+
+      /* messages */
+      #messages {
+        flex: 1;
+        overflow-y: auto;
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .msg {
+        max-width: 88%;
+        font-size: 14px;
+        line-height: 1.5;
+        padding: 10px 14px;
+        border-radius: 18px;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+      }
+      .msg.user {
+        align-self: flex-end;
+        background: var(--accent);
+        color: #fff;
+        border-bottom-right-radius: 6px;
+      }
+      .msg.assistant {
+        align-self: flex-start;
+        background: var(--bubble);
+        border-bottom-left-radius: 6px;
+      }
+      .msg.error {
+        align-self: flex-start;
+        background: rgba(255, 69, 58, 0.16);
+        font-size: 13px;
+        border-bottom-left-radius: 6px;
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        margin-top: 6px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 11px;
+        color: var(--text-2);
+        background: var(--hover);
+      }
+      .badge.grounded {
+        background: rgba(52, 199, 89, 0.18);
+      }
+      .badge.ungrounded {
+        background: rgba(255, 149, 0, 0.18);
+      }
+      .msg .usage {
+        display: block;
+        margin-top: 5px;
+        font-size: 11px;
+        opacity: 0.6;
+      }
+      .msg.user .usage {
+        color: rgba(255, 255, 255, 0.8);
+      }
+
+      /* composer */
+      .composer {
+        padding: 12px 14px;
+        display: flex;
+        gap: 8px;
+        align-items: flex-end;
+        border-top: 1px solid var(--hair);
+      }
+      #prompt {
+        flex: 1;
+        resize: none;
+        font: inherit;
+        font-size: 14px;
+        padding: 10px 14px;
+        border-radius: 20px;
+        border: 1px solid var(--hair);
+        background: var(--canvas);
+        color: var(--text);
+        outline: none;
+        max-height: 120px;
+      }
+      #prompt:focus {
+        border-color: var(--accent);
+      }
+      .send {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        border: none;
+        background: var(--accent);
+        color: #fff;
+        font-size: 17px;
+        cursor: pointer;
+        flex-shrink: 0;
+      }
+      .send:disabled {
+        opacity: 0.45;
+        cursor: default;
+      }
+
+      /* slim status strip */
+      #status {
+        padding: 5px 18px 9px;
+        font-size: 11.5px;
+        color: var(--text-3);
+        min-height: 14px;
+        flex-shrink: 0;
+      }
     </style>
   </head>
   <body>
-    <header>
-      <button id="open">Open note…</button>
-      <button id="save" disabled>Save</button>
-      <span class="path" id="path"></span>
-    </header>
+    <div class="bar">
+      <span class="brand">Second Brain</span>
+      <span class="spacer"></span>
+      <button class="pill" id="open">Open note…</button>
+      <button class="pill primary" id="save" disabled>Save</button>
+    </div>
 
-    <div id="main">
-      <div id="left">
+    <div class="grid">
+      <!-- chats card -->
+      <section class="card">
+        <div class="ch">CHATS <button class="add" id="new-chat" title="New chat">+</button></div>
+        <div class="chats" id="chat-list"></div>
+      </section>
+
+      <!-- editor card -->
+      <section class="card">
+        <div class="ed-meta" id="path">No note open</div>
         <textarea
           id="editor"
+          class="editor"
           spellcheck="false"
           placeholder="Open a note from your vault to start editing."
           disabled
         ></textarea>
-
         <section id="conflict">
           <strong>This note changed on disk (e.g. Obsidian saved it).</strong>
           <span>Your unsaved edits and the on-disk version differ. Choose:</span>
@@ -301,27 +533,22 @@
             <button id="keep-both">Keep both</button>
           </div>
         </section>
-      </div>
+      </section>
 
-      <aside id="chat">
-        <div id="chats-bar">
-          <button id="new-chat">+ New chat</button>
-          <span id="chats-label">Chats</span>
-        </div>
-        <div id="chat-list"></div>
-
-        <div id="chat-bar">
-          <select id="provider">
-            <option value="anthropic">Anthropic</option>
-            <option value="openai">OpenAI</option>
-          </select>
+      <!-- chat card -->
+      <section class="card">
+        <div class="chat-top">
+          <div class="segmented" id="provider">
+            <button data-provider="anthropic" class="on">Anthropic</button>
+            <button data-provider="openai">OpenAI</button>
+          </div>
           <input
             id="model"
             type="text"
             value="claude-sonnet-4-5-20250929"
             spellcheck="false"
           />
-          <button id="settings-toggle" title="API keys">Key</button>
+          <button id="settings-toggle" class="key-btn" title="API keys">Key</button>
         </div>
 
         <section id="settings">
@@ -337,26 +564,23 @@
           </div>
         </section>
 
-        <div id="ground-bar">
-          <label>
-            <input type="checkbox" id="ground-toggle" />
-            Ground in vault
-          </label>
-          <button id="index-btn">Index vault</button>
+        <div class="ground">
+          <span class="gdot" id="ground-dot"></span>
           <span id="ground-state"></span>
+          <button id="index-btn">Index your vault</button>
         </div>
 
         <div id="messages"></div>
 
-        <div id="composer">
+        <div class="composer">
           <textarea
             id="prompt"
-            rows="2"
+            rows="1"
             placeholder="Ask anything… (Enter to send, Shift+Enter for newline)"
           ></textarea>
-          <button id="send">Send</button>
+          <button class="send" id="send">↑</button>
         </div>
-      </aside>
+      </section>
     </div>
 
     <div id="status"></div>

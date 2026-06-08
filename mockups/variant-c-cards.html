@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Variant C — Cards</title>
+    <style>
+      /* ===========================================================
+         VARIANT C — "Cards"
+         Softer, more consumer. Like macOS Settings / Things 3.
+         Grouped cards float on a tinted canvas, generous padding,
+         larger radii, gentle elevation. Warmer than A and B.
+         =========================================================== */
+      :root {
+        color-scheme: light dark;
+        --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+        --accent: #007aff;
+        --canvas: #eef0f4;
+        --card: #ffffff;
+        --text: #1d1d1f;
+        --text-2: #6e6e73;
+        --text-3: #a1a1a6;
+        --hair: rgba(0, 0, 0, 0.07);
+        --hover: rgba(0, 0, 0, 0.045);
+        --sel: rgba(0, 122, 255, 0.1);
+        --bubble: #f2f3f7;
+        --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.05);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --accent: #0a84ff;
+          --canvas: #121214;
+          --card: #1f1f22;
+          --text: #f5f5f7;
+          --text-2: #a1a1a6;
+          --text-3: #6e6e73;
+          --hair: rgba(255, 255, 255, 0.08);
+          --hover: rgba(255, 255, 255, 0.06);
+          --sel: rgba(10, 132, 255, 0.2);
+          --bubble: #2b2b2e;
+          --shadow: 0 1px 3px rgba(0,0,0,0.4), 0 8px 28px rgba(0,0,0,0.3);
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: var(--font);
+        color: var(--text);
+        background: var(--canvas);
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        font-size: 13px;
+        -webkit-font-smoothing: antialiased;
+      }
+      .bar {
+        height: 50px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 18px 0 86px;
+        flex-shrink: 0;
+      }
+      .bar .brand { font-weight: 700; font-size: 14px; letter-spacing: -0.01em; }
+      .bar .spacer { flex: 1; }
+      .pill {
+        height: 30px;
+        padding: 0 14px;
+        border-radius: 999px;
+        border: none;
+        background: var(--card);
+        color: var(--text);
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+        box-shadow: var(--shadow);
+      }
+      .pill.primary { background: var(--accent); color: #fff; }
+
+      .grid {
+        flex: 1;
+        display: grid;
+        grid-template-columns: 220px 1fr 360px;
+        gap: 16px;
+        padding: 4px 16px 16px;
+        min-height: 0;
+      }
+      .card {
+        background: var(--card);
+        border-radius: 16px;
+        box-shadow: var(--shadow);
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        overflow: hidden;
+      }
+      .card .ch {
+        padding: 14px 16px 8px;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text-2);
+        display: flex;
+        align-items: center;
+      }
+      .card .ch .add {
+        margin-left: auto; border: none; background: transparent;
+        color: var(--accent); font-size: 19px; line-height: 1; cursor: pointer;
+      }
+      /* chats card */
+      .chats { overflow-y: auto; padding: 0 8px 10px; }
+      .crow { padding: 9px 11px; border-radius: 11px; cursor: pointer; margin-bottom: 3px; }
+      .crow:hover { background: var(--hover); }
+      .crow.active { background: var(--sel); }
+      .crow .t { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .crow .s { font-size: 11.5px; color: var(--text-2); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+      /* editor card */
+      .ed-meta { padding: 16px 22px 0; color: var(--text-3); font-size: 11.5px; }
+      .editor { flex: 1; padding: 8px 24px 24px; overflow-y: auto; line-height: 1.62; font-size: 15px; outline: none; }
+      .editor h1 { font-size: 26px; font-weight: 700; margin: 12px 0 14px; letter-spacing: -0.01em; }
+      .editor p { margin: 0 0 13px; }
+      .editor .tag { color: var(--accent); }
+
+      /* chat card */
+      .chat-top {
+        padding: 12px 14px;
+        display: flex; align-items: center; gap: 8px;
+        border-bottom: 1px solid var(--hair);
+      }
+      .segmented { display: inline-flex; background: var(--hover); border-radius: 9px; padding: 2px; }
+      .segmented button { border: none; background: transparent; font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 7px; color: var(--text-2); cursor: pointer; }
+      .segmented button.on { background: var(--card); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,0.12); }
+      .model { margin-left: auto; font-size: 11.5px; color: var(--text-2); display: inline-flex; align-items: center; gap: 5px; }
+      .model .dot { width: 7px; height: 7px; border-radius: 50%; background: #34c759; }
+      .ground { padding: 9px 16px; font-size: 12px; color: var(--text-2); display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--hair); }
+      .switch { position: relative; width: 34px; height: 20px; border-radius: 999px; background: #34c759; flex-shrink: 0; }
+      .switch::after { content:""; position:absolute; top:2px; left:16px; width:16px; height:16px; border-radius:50%; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.3); }
+      .messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+      .msg { max-width: 88%; font-size: 14px; line-height: 1.5; }
+      .msg .bubble { padding: 10px 14px; border-radius: 18px; }
+      .msg.user { align-self: flex-end; }
+      .msg.user .bubble { background: var(--accent); color: #fff; border-bottom-right-radius: 6px; }
+      .msg.assistant { align-self: flex-start; }
+      .msg.assistant .bubble { background: var(--bubble); border-bottom-left-radius: 6px; }
+      .badge { display:inline-flex; align-items:center; gap:5px; margin-top:6px; font-size:11px; color: var(--text-2); }
+      .badge .d { width:6px; height:6px; border-radius:50%; background:#34c759; }
+      .composer { padding: 12px 14px; display: flex; gap: 8px; align-items: flex-end; border-top: 1px solid var(--hair); }
+      .composer textarea {
+        flex: 1; resize: none; font: inherit; font-size: 14px; padding: 10px 14px;
+        border-radius: 20px; border: 1px solid var(--hair); background: var(--canvas);
+        color: var(--text); outline: none; max-height: 120px;
+      }
+      .composer textarea:focus { border-color: var(--accent); }
+      .send { width: 36px; height: 36px; border-radius: 50%; border: none; background: var(--accent); color: #fff; font-size: 17px; cursor: pointer; flex-shrink: 0; }
+    </style>
+  </head>
+  <body>
+    <div class="bar">
+      <span class="brand">Second Brain</span>
+      <span class="spacer"></span>
+      <button class="pill">Open note…</button>
+      <button class="pill primary">Save</button>
+    </div>
+
+    <div class="grid">
+      <section class="card">
+        <div class="ch">CHATS <button class="add">+</button></div>
+        <div class="chats">
+          <div class="crow active"><div class="t">Pricing model brainstorm</div><div class="s">What if we tiered by vault…</div></div>
+          <div class="crow"><div class="t">Summarize today's meeting</div><div class="s">Three decisions, two threads</div></div>
+          <div class="crow"><div class="t">Draft launch tweet</div><div class="s">Local-first second brain…</div></div>
+          <div class="crow"><div class="t">New chat</div><div class="s">No messages yet</div></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="ed-meta">~/Claude/Strategy/Q2-strategy.md · edited 2m ago</div>
+        <div class="editor">
+          <h1>Q2 Strategy</h1>
+          <p>The wedge is the demand gate: 5 power users, 3 say they'd pay. Everything before that is just building the demo.</p>
+          <p>Local-first is the moat. Features are the demo — they're copyable. What isn't copyable is that your whole brain lives on your own disk and never leaves. Link to <span class="tag">#positioning</span> and <span class="tag">#moat</span>.</p>
+          <p>Next milestone is TTS so the brain can talk back while you walk.</p>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="chat-top">
+          <div class="segmented"><button class="on">Anthropic</button><button>OpenAI</button></div>
+          <span class="model"><span class="dot"></span> Sonnet 4.5</span>
+        </div>
+        <div class="ground"><span class="switch"></span> Grounded · 142 notes</div>
+        <div class="messages">
+          <div class="msg user"><div class="bubble">What pricing models fit a local-first app where I can't meter usage?</div></div>
+          <div class="msg assistant">
+            <div class="bubble">Lean on value tiers, not usage. Free local tier, then a flat subscription or one-time license unlocking sync, mobile, and voice. Per-token billing fights the local-first promise.</div>
+            <div class="badge"><span class="d"></span> grounded · 3 notes</div>
+          </div>
+          <div class="msg user"><div class="bubble">Could vault size be a fair axis?</div></div>
+          <div class="msg assistant">
+            <div class="bubble">It punishes your heaviest users — the people who become evangelists. Capability tiers read cleaner.</div>
+            <div class="badge"><span class="d"></span> grounded · 2 notes</div>
+          </div>
+        </div>
+        <div class="composer">
+          <textarea rows="1" placeholder="Message…"></textarea>
+          <button class="send">↑</button>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>

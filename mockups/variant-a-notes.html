@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Variant A — Notes</title>
+    <style>
+      /* ===========================================================
+         VARIANT A — "Notes"
+         Sidebar-led, like Notes.app / Mail.app.
+         Translucent sidebar, unified toolbar, editor center,
+         chat as a right inspector. Three columns.
+         =========================================================== */
+      :root {
+        color-scheme: light dark;
+        --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+        --radius: 8px;
+        --accent: #007aff;
+        --sidebar-bg: rgba(246, 246, 248, 0.85);
+        --content-bg: #ffffff;
+        --text: #1d1d1f;
+        --text-2: #6e6e73;
+        --text-3: #a1a1a6;
+        --hair: rgba(0, 0, 0, 0.08);
+        --hair-strong: rgba(0, 0, 0, 0.13);
+        --hover: rgba(0, 0, 0, 0.04);
+        --sel: rgba(0, 122, 255, 0.12);
+        --bubble-assistant: #f1f1f4;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --sidebar-bg: rgba(38, 38, 41, 0.82);
+          --content-bg: #1e1e21;
+          --text: #f5f5f7;
+          --text-2: #a1a1a6;
+          --text-3: #6e6e73;
+          --hair: rgba(255, 255, 255, 0.09);
+          --hair-strong: rgba(255, 255, 255, 0.14);
+          --hover: rgba(255, 255, 255, 0.06);
+          --sel: rgba(10, 132, 255, 0.22);
+          --accent: #0a84ff;
+          --bubble-assistant: #2c2c2f;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: var(--font);
+        color: var(--text);
+        background: var(--content-bg);
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        font-size: 13px;
+        -webkit-font-smoothing: antialiased;
+      }
+      /* unified toolbar */
+      .toolbar {
+        height: 52px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 14px 0 86px; /* leave room for traffic lights */
+        background: var(--sidebar-bg);
+        backdrop-filter: saturate(180%) blur(20px);
+        border-bottom: 1px solid var(--hair);
+        flex-shrink: 0;
+      }
+      .toolbar .title { font-weight: 600; font-size: 14px; }
+      .toolbar .spacer { flex: 1; }
+      .tbtn {
+        height: 28px;
+        padding: 0 11px;
+        border-radius: 7px;
+        border: none;
+        background: transparent;
+        color: var(--text);
+        font: inherit;
+        font-size: 13px;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        cursor: pointer;
+      }
+      .tbtn:hover { background: var(--hover); }
+      .tbtn.primary { background: var(--accent); color: #fff; }
+      .tbtn.primary:hover { filter: brightness(1.06); }
+      .glyph { width: 15px; height: 15px; display: inline-block; opacity: 0.85; }
+
+      .columns { flex: 1; display: flex; min-height: 0; }
+
+      /* sidebar: chat list */
+      .sidebar {
+        width: 240px;
+        background: var(--sidebar-bg);
+        backdrop-filter: saturate(180%) blur(20px);
+        border-right: 1px solid var(--hair);
+        display: flex;
+        flex-direction: column;
+        flex-shrink: 0;
+      }
+      .sidebar .head {
+        padding: 12px 14px 6px;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--text-3);
+        display: flex;
+        align-items: center;
+      }
+      .sidebar .head .add {
+        margin-left: auto;
+        border: none;
+        background: transparent;
+        color: var(--accent);
+        font-size: 18px;
+        line-height: 1;
+        cursor: pointer;
+        padding: 0 2px;
+      }
+      .chat-list { overflow-y: auto; padding: 0 8px 8px; }
+      .chat-row {
+        padding: 8px 10px;
+        border-radius: var(--radius);
+        cursor: pointer;
+        margin-bottom: 2px;
+      }
+      .chat-row:hover { background: var(--hover); }
+      .chat-row.active { background: var(--sel); }
+      .chat-row .t {
+        font-size: 13px;
+        font-weight: 500;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .chat-row .s {
+        font-size: 11.5px;
+        color: var(--text-2);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        margin-top: 1px;
+      }
+
+      /* editor column */
+      .editor-col {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        background: var(--content-bg);
+        border-right: 1px solid var(--hair);
+      }
+      .doc-meta {
+        padding: 10px 22px;
+        color: var(--text-3);
+        font-size: 11.5px;
+        border-bottom: 1px solid var(--hair);
+      }
+      .editor {
+        flex: 1;
+        padding: 20px 26px;
+        overflow-y: auto;
+        line-height: 1.62;
+        font-size: 15px;
+        color: var(--text);
+        outline: none;
+      }
+      .editor h1 { font-size: 25px; font-weight: 700; margin: 0 0 14px; letter-spacing: -0.01em; }
+      .editor p { margin: 0 0 13px; }
+      .editor .tag { color: var(--accent); }
+
+      /* chat inspector */
+      .chat-col {
+        width: 380px;
+        display: flex;
+        flex-direction: column;
+        flex-shrink: 0;
+        background: var(--content-bg);
+      }
+      .chat-toolbar {
+        padding: 9px 12px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        border-bottom: 1px solid var(--hair);
+      }
+      .segmented {
+        display: inline-flex;
+        background: var(--hover);
+        border-radius: 7px;
+        padding: 2px;
+      }
+      .segmented button {
+        border: none;
+        background: transparent;
+        font: inherit;
+        font-size: 12px;
+        padding: 4px 11px;
+        border-radius: 5px;
+        color: var(--text-2);
+        cursor: pointer;
+      }
+      .segmented button.on {
+        background: var(--content-bg);
+        color: var(--text);
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+      }
+      .model-pill {
+        margin-left: auto;
+        font-size: 11.5px;
+        color: var(--text-2);
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+      }
+      .dot { width: 7px; height: 7px; border-radius: 50%; background: #34c759; }
+      .ground-strip {
+        padding: 7px 14px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        color: var(--text-2);
+        border-bottom: 1px solid var(--hair);
+      }
+      .switch {
+        position: relative;
+        width: 34px;
+        height: 20px;
+        border-radius: 999px;
+        background: #34c759;
+        flex-shrink: 0;
+      }
+      .switch::after {
+        content: "";
+        position: absolute;
+        top: 2px;
+        left: 16px;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: #fff;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+      }
+      .messages {
+        flex: 1;
+        overflow-y: auto;
+        padding: 16px 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .msg { max-width: 86%; font-size: 14px; line-height: 1.5; }
+      .msg .bubble { padding: 9px 13px; border-radius: 16px; }
+      .msg.user { align-self: flex-end; }
+      .msg.user .bubble { background: var(--accent); color: #fff; border-bottom-right-radius: 5px; }
+      .msg.assistant { align-self: flex-start; }
+      .msg.assistant .bubble { background: var(--bubble-assistant); border-bottom-left-radius: 5px; }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        margin-top: 6px;
+        font-size: 11px;
+        color: var(--text-2);
+      }
+      .badge .d { width: 6px; height: 6px; border-radius: 50%; background: #34c759; }
+      .composer {
+        padding: 12px;
+        border-top: 1px solid var(--hair);
+        display: flex;
+        gap: 8px;
+        align-items: flex-end;
+      }
+      .composer textarea {
+        flex: 1;
+        resize: none;
+        font: inherit;
+        font-size: 14px;
+        padding: 9px 12px;
+        border-radius: 18px;
+        border: 1px solid var(--hair-strong);
+        background: var(--content-bg);
+        color: var(--text);
+        max-height: 120px;
+        outline: none;
+      }
+      .composer textarea:focus { border-color: var(--accent); }
+      .send {
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        border: none;
+        background: var(--accent);
+        color: #fff;
+        font-size: 17px;
+        cursor: pointer;
+        flex-shrink: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="toolbar">
+      <button class="tbtn"><svg class="glyph" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4.5h12M2 8h12M2 11.5h12"/></svg></button>
+      <span class="title">Q2 strategy notes</span>
+      <span class="spacer"></span>
+      <button class="tbtn"><svg class="glyph" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 3h10v10H3z"/><path d="M6 7l2 2 4-4"/></svg> Open note</button>
+      <button class="tbtn primary">Save</button>
+    </div>
+
+    <div class="columns">
+      <aside class="sidebar">
+        <div class="head">Chats <button class="add">+</button></div>
+        <div class="chat-list">
+          <div class="chat-row active">
+            <div class="t">Pricing model brainstorm</div>
+            <div class="s">What if we tiered by vault size…</div>
+          </div>
+          <div class="chat-row">
+            <div class="t">Summarize today's meeting</div>
+            <div class="s">Three decisions, two open threads</div>
+          </div>
+          <div class="chat-row">
+            <div class="t">Draft launch tweet</div>
+            <div class="s">Local-first second brain that…</div>
+          </div>
+          <div class="chat-row">
+            <div class="t">New chat</div>
+            <div class="s">No messages yet</div>
+          </div>
+        </div>
+      </aside>
+
+      <section class="editor-col">
+        <div class="doc-meta">~/Claude/Strategy/Q2-strategy.md · edited 2m ago</div>
+        <div class="editor">
+          <h1>Q2 Strategy</h1>
+          <p>The wedge is the demand gate: 5 power users, 3 say they'd pay. Everything before that is just building the demo.</p>
+          <p>Local-first is the moat. Features are the demo — they're copyable. What isn't copyable is that your whole brain lives on your own disk and never leaves. Link this to <span class="tag">#positioning</span> and <span class="tag">#moat</span>.</p>
+          <p>Next milestone is TTS so the brain can talk back while you walk.</p>
+        </div>
+      </section>
+
+      <section class="chat-col">
+        <div class="chat-toolbar">
+          <div class="segmented">
+            <button class="on">Anthropic</button>
+            <button>OpenAI</button>
+          </div>
+          <span class="model-pill"><span class="dot"></span> Sonnet 4.5</span>
+        </div>
+        <div class="ground-strip">
+          <span class="switch"></span> Grounded in vault · 142 notes indexed
+        </div>
+        <div class="messages">
+          <div class="msg user"><div class="bubble">What pricing models would fit a local-first app where I can't see usage?</div></div>
+          <div class="msg assistant">
+            <div class="bubble">Since you can't meter usage server-side, lean on value-based tiers: a free local tier, then a one-time license or a flat subscription that unlocks sync and TTS. Charging per-token fights the local-first promise.</div>
+            <div class="badge"><span class="d"></span> grounded · 3 notes</div>
+          </div>
+          <div class="msg user"><div class="bubble">Could vault size be a fair axis?</div></div>
+          <div class="msg assistant">
+            <div class="bubble">It's legible and scales with the heavy users, but it punishes exactly the power users you want as evangelists. A capability tier (sync, mobile, voice) reads cleaner.</div>
+            <div class="badge"><span class="d"></span> grounded · 2 notes</div>
+          </div>
+        </div>
+        <div class="composer">
+          <textarea rows="1" placeholder="Message…"></textarea>
+          <button class="send">↑</button>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>

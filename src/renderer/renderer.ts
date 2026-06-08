@@ -113,7 +113,10 @@ $<HTMLButtonElement>("keep-both").addEventListener("click", () =>
 // only the active chat's plain transcript.
 // ---------------------------------------------------------------------------
 
-const providerSelect = $<HTMLSelectElement>("provider");
+const providerBar = $<HTMLDivElement>("provider");
+const providerButtons = Array.from(
+  providerBar.querySelectorAll<HTMLButtonElement>("button[data-provider]")
+);
 const modelInput = $<HTMLInputElement>("model");
 const settingsToggle = $<HTMLButtonElement>("settings-toggle");
 const settingsPanel = $<HTMLElement>("settings");
@@ -123,9 +126,9 @@ const keySave = $<HTMLButtonElement>("key-save");
 const messagesEl = $<HTMLDivElement>("messages");
 const promptEl = $<HTMLTextAreaElement>("prompt");
 const sendBtn = $<HTMLButtonElement>("send");
-const groundToggle = $<HTMLInputElement>("ground-toggle");
 const indexBtn = $<HTMLButtonElement>("index-btn");
 const groundState = $<HTMLSpanElement>("ground-state");
+const groundDot = $<HTMLSpanElement>("ground-dot");
 const chatListEl = $<HTMLDivElement>("chat-list");
 const newChatBtn = $<HTMLButtonElement>("new-chat");
 
@@ -141,9 +144,29 @@ let currentChatId: string | null = null;
 const transcript: ChatMessage[] = [];
 let configured: ProviderId[] = [];
 let sending = false;
+let providerId: ProviderId = "anthropic";
 
 function currentProvider(): ProviderId {
-  return providerSelect.value as ProviderId;
+  return providerId;
+}
+
+// Segmented provider control (replaces the old <select>). Selecting a provider
+// updates the .on highlight, swaps in that provider's default model, and
+// refreshes the key status for the newly-selected provider.
+function setProvider(id: ProviderId): void {
+  providerId = id;
+  for (const btn of providerButtons) {
+    btn.classList.toggle("on", btn.dataset.provider === id);
+  }
+  modelInput.value = DEFAULT_MODEL[id];
+  void refreshAiStatus();
+}
+
+for (const btn of providerButtons) {
+  btn.addEventListener("click", () => {
+    const id = btn.dataset.provider as ProviderId;
+    if (id !== providerId) setProvider(id);
+  });
 }
 
 function humanError(err: SafeError): string {
@@ -283,20 +306,37 @@ async function removeChat(id: string): Promise<void> {
 
 newChatBtn.addEventListener("click", () => void newChat());
 
+// Grounding is ALWAYS ON — there is no toggle. This status line just reports,
+// calmly, whether the vault is connected so answers can use it. Three states:
+//   indexing → "Indexing your vault…"           (dot off, button hidden)
+//   ready    → "Vault connected · N notes"       (dot green, button = "Re-index")
+//   first run→ first-run CTA + prominent button  (dot off, button = "Index your vault")
 async function refreshGroundingStatus(): Promise<void> {
   const s = await window.secondBrain.aiGroundingStatus();
   if (s.indexing) {
-    groundState.textContent = "indexing…";
+    groundDot.classList.remove("on");
+    groundState.textContent = "Indexing your vault…";
+    indexBtn.hidden = true;
   } else if (s.ready) {
-    groundState.textContent = `indexed ${s.notes} notes / ${s.chunks} chunks`;
+    groundDot.classList.add("on");
+    groundState.textContent = `Vault connected · ${s.notes} notes`;
+    indexBtn.hidden = false;
+    indexBtn.classList.remove("cta");
+    indexBtn.textContent = "Re-index";
   } else {
-    groundState.textContent = "not indexed";
+    groundDot.classList.remove("on");
+    groundState.textContent = "Index your vault so answers can use your notes";
+    indexBtn.hidden = false;
+    indexBtn.classList.add("cta");
+    indexBtn.textContent = "Index your vault";
   }
 }
 
 indexBtn.addEventListener("click", async () => {
   indexBtn.disabled = true;
-  groundState.textContent = "indexing… (first run downloads the local model)";
+  groundDot.classList.remove("on");
+  groundState.textContent = "Indexing your vault… (first run downloads the local model)";
+  indexBtn.hidden = true;
   const res = await window.secondBrain.aiIndexVault();
   indexBtn.disabled = false;
   if (res.ok) {
@@ -328,11 +368,6 @@ async function refreshAiStatus(): Promise<void> {
 settingsToggle.addEventListener("click", () => {
   settingsPanel.classList.toggle("show");
   if (settingsPanel.classList.contains("show")) void refreshAiStatus();
-});
-
-providerSelect.addEventListener("change", () => {
-  modelInput.value = DEFAULT_MODEL[currentProvider()];
-  void refreshAiStatus();
 });
 
 keySave.addEventListener("click", async () => {
@@ -387,7 +422,7 @@ async function send(): Promise<void> {
       model: { provider: currentProvider(), model: modelInput.value.trim() },
       messages: transcript,
     },
-    { ground: groundToggle.checked }
+    { ground: true }
   );
 
   if (res.ok) {
@@ -425,8 +460,6 @@ promptEl.addEventListener("keydown", (e) => {
     void send();
   }
 });
-
-groundToggle.addEventListener("change", () => void refreshGroundingStatus());
 
 // On launch, resume the most recent chat (or start a fresh one if none exist).
 async function initChats(): Promise<void> {

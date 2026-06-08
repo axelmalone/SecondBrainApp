@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Variant B — Focus</title>
+    <style>
+      /* ===========================================================
+         VARIANT B — "Focus"
+         Editor-first. Full-width writing surface, chat is a
+         collapsible right inspector you summon. Chats live in a
+         dropdown, not a permanent column. Like Pages / Ulysses.
+         Maximizes the note; AI is on tap, not always-present.
+         =========================================================== */
+      :root {
+        color-scheme: light dark;
+        --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+        --serif: "New York", "Iowan Old Style", Georgia, serif;
+        --accent: #007aff;
+        --bg: #fbfbfd;
+        --panel: #ffffff;
+        --text: #1d1d1f;
+        --text-2: #6e6e73;
+        --text-3: #a1a1a6;
+        --hair: rgba(0, 0, 0, 0.08);
+        --hair-strong: rgba(0, 0, 0, 0.14);
+        --hover: rgba(0, 0, 0, 0.05);
+        --bubble: #f0f0f3;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --accent: #0a84ff;
+          --bg: #161618;
+          --panel: #1f1f22;
+          --text: #f5f5f7;
+          --text-2: #a1a1a6;
+          --text-3: #6e6e73;
+          --hair: rgba(255, 255, 255, 0.09);
+          --hair-strong: rgba(255, 255, 255, 0.15);
+          --hover: rgba(255, 255, 255, 0.07);
+          --bubble: #2b2b2e;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: var(--font);
+        color: var(--text);
+        background: var(--bg);
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        font-size: 13px;
+        -webkit-font-smoothing: antialiased;
+      }
+      .titlebar {
+        height: 46px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 0 14px 0 86px;
+        border-bottom: 1px solid var(--hair);
+        background: var(--bg);
+        flex-shrink: 0;
+      }
+      .chatpick {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        height: 28px;
+        padding: 0 10px;
+        border-radius: 7px;
+        cursor: pointer;
+        font-weight: 600;
+        font-size: 13px;
+      }
+      .chatpick:hover { background: var(--hover); }
+      .chatpick .chev { color: var(--text-3); font-size: 10px; }
+      .spacer { flex: 1; }
+      .icon-btn {
+        width: 30px;
+        height: 28px;
+        border: none;
+        background: transparent;
+        border-radius: 7px;
+        color: var(--text-2);
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .icon-btn:hover { background: var(--hover); color: var(--text); }
+      .icon-btn.on { background: var(--sel, rgba(0,122,255,0.14)); color: var(--accent); }
+      .glyph { width: 16px; height: 16px; }
+
+      .body { flex: 1; display: flex; min-height: 0; }
+
+      .stage {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        overflow-y: auto;
+      }
+      .sheet {
+        width: 100%;
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 48px 40px 120px;
+      }
+      .sheet .crumb { color: var(--text-3); font-size: 12px; margin-bottom: 28px; }
+      .sheet h1 {
+        font-family: var(--serif);
+        font-size: 34px;
+        font-weight: 700;
+        margin: 0 0 18px;
+        letter-spacing: -0.012em;
+      }
+      .sheet p {
+        font-family: var(--serif);
+        font-size: 18px;
+        line-height: 1.7;
+        margin: 0 0 18px;
+        color: var(--text);
+      }
+      .sheet .tag { color: var(--accent); font-family: var(--font); font-size: 16px; }
+
+      /* chat inspector (slides in) */
+      .inspector {
+        width: 372px;
+        flex-shrink: 0;
+        border-left: 1px solid var(--hair);
+        background: var(--panel);
+        display: flex;
+        flex-direction: column;
+      }
+      .insp-head {
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--hair);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .insp-head .label { font-weight: 600; font-size: 13px; }
+      .insp-head .model {
+        margin-left: auto;
+        font-size: 12px;
+        color: var(--text-2);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .insp-head .model .dot { width: 7px; height: 7px; border-radius: 50%; background: #34c759; }
+      .ground-row {
+        padding: 9px 16px;
+        font-size: 12px;
+        color: var(--text-2);
+        border-bottom: 1px solid var(--hair);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .switch { position: relative; width: 34px; height: 20px; border-radius: 999px; background: #34c759; flex-shrink: 0; }
+      .switch::after { content:""; position:absolute; top:2px; left:16px; width:16px; height:16px; border-radius:50%; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.3); }
+      .messages {
+        flex: 1;
+        overflow-y: auto;
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .msg { max-width: 88%; font-size: 14px; line-height: 1.5; }
+      .msg .bubble { padding: 9px 13px; border-radius: 15px; }
+      .msg.user { align-self: flex-end; }
+      .msg.user .bubble { background: var(--accent); color: #fff; border-bottom-right-radius: 5px; }
+      .msg.assistant { align-self: flex-start; }
+      .msg.assistant .bubble { background: var(--bubble); border-bottom-left-radius: 5px; }
+      .badge { display:inline-flex; align-items:center; gap:5px; margin-top:6px; font-size:11px; color: var(--text-2); }
+      .badge .d { width:6px; height:6px; border-radius:50%; background:#34c759; }
+      .badge.amber .d { background:#ff9500; }
+      .composer {
+        padding: 12px 16px;
+        border-top: 1px solid var(--hair);
+        display: flex;
+        gap: 8px;
+        align-items: flex-end;
+      }
+      .composer textarea {
+        flex: 1;
+        resize: none;
+        font: inherit;
+        font-size: 14px;
+        padding: 9px 12px;
+        border-radius: 18px;
+        border: 1px solid var(--hair-strong);
+        background: var(--bg);
+        color: var(--text);
+        outline: none;
+        max-height: 120px;
+      }
+      .composer textarea:focus { border-color: var(--accent); }
+      .send {
+        width: 34px; height: 34px; border-radius: 50%;
+        border: none; background: var(--accent); color: #fff;
+        font-size: 17px; cursor: pointer; flex-shrink: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="titlebar">
+      <div class="chatpick">Pricing model brainstorm <span class="chev">▾</span></div>
+      <span class="spacer"></span>
+      <button class="icon-btn" title="Open note"><svg class="glyph" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4.5l2-2h3l1.5 1.5H14V13H2z"/></svg></button>
+      <button class="icon-btn" title="Save"><svg class="glyph" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 2h8l2 2v10H3z"/><path d="M5 2v4h5V2M6 10h4"/></svg></button>
+      <button class="icon-btn on" title="Toggle chat"><svg class="glyph" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"/></svg></button>
+    </div>
+
+    <div class="body">
+      <div class="stage">
+        <div class="sheet">
+          <div class="crumb">~/Claude/Strategy/Q2-strategy.md · edited 2m ago</div>
+          <h1>Q2 Strategy</h1>
+          <p>The wedge is the demand gate: 5 power users, 3 say they'd pay. Everything before that is just building the demo.</p>
+          <p>Local-first is the moat. Features are the demo — they're copyable. What isn't copyable is that your whole brain lives on your own disk and never leaves. Link this to <span class="tag">#positioning</span> and <span class="tag">#moat</span>.</p>
+          <p>Next milestone is TTS so the brain can talk back while you walk. After that, persistent disk-backed grounding so the index survives a relaunch instead of rebuilding every cold start.</p>
+        </div>
+      </div>
+
+      <aside class="inspector">
+        <div class="insp-head">
+          <span class="label">Chat</span>
+          <span class="model"><span class="dot"></span> Anthropic · Sonnet 4.5</span>
+        </div>
+        <div class="ground-row"><span class="switch"></span> Grounded · 142 notes</div>
+        <div class="messages">
+          <div class="msg user"><div class="bubble">What pricing models fit a local-first app where I can't meter usage?</div></div>
+          <div class="msg assistant">
+            <div class="bubble">Lean on value tiers, not usage. Free local tier, then a flat subscription or one-time license that unlocks sync, mobile, and voice. Per-token billing fights the local-first promise and you can't measure it anyway.</div>
+            <div class="badge"><span class="d"></span> grounded · 3 notes</div>
+          </div>
+          <div class="msg user"><div class="bubble">What about charging by vault size?</div></div>
+          <div class="msg assistant">
+            <div class="bubble">It punishes your heaviest users — the exact people who become evangelists. Capability tiers read cleaner and keep the power users happy.</div>
+            <div class="badge amber"><span class="d"></span> answered without vault context (no matches)</div>
+          </div>
+        </div>
+        <div class="composer">
+          <textarea rows="1" placeholder="Message…"></textarea>
+          <button class="send">↑</button>
+        </div>
+      </aside>
+    </div>
+  </body>
+</html>
