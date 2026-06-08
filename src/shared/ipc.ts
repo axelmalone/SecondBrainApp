@@ -14,6 +14,7 @@ import type {
 } from "./ai.js";
 import type { ChatSession, ChatSummary, StoredMessage } from "./chat.js";
 import type { AcceptanceStats, ApplyResult, StoredProposal } from "./proposal.js";
+import type { RenderNode } from "./render.js";
 
 export type {
   AiIndexResult,
@@ -26,6 +27,7 @@ export type {
 } from "./ai.js";
 export type { ChatSession, ChatSummary, StoredMessage } from "./chat.js";
 export type { AcceptanceStats, ApplyResult, StoredProposal } from "./proposal.js";
+export type { RenderNode, RenderTag } from "./render.js";
 
 export type ConflictResolution = "keep-mine" | "take-theirs" | "keep-both";
 
@@ -79,6 +81,12 @@ export interface SecondBrainAPI {
   save(path: string, text: string): Promise<SaveResult>;
   /** Resolve a pending conflict for an open note. */
   resolve(path: string, resolution: ConflictResolution): Promise<ResolveResult>;
+  /** Render markdown to the safe render-AST for the glass-box read view (5A). */
+  renderMarkdown(source: string): Promise<RenderNode[]>;
+  /** Open a wikilink's target note by name/path. null if it doesn't exist. */
+  openWikilink(target: string): Promise<OpenResult | null>;
+  /** Open an external (http/https/mailto) link in the system browser. */
+  openExternal(url: string): Promise<void>;
 
   /** Current key-store state + which providers have a key configured. */
   aiStatus(): Promise<AiStatus>;

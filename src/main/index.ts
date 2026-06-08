@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog } from "electron";
+import { app, BrowserWindow, ipcMain, dialog, shell } from "electron";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -19,6 +19,8 @@ import { VaultWatcher } from "./vaultWatcher.js";
 import { listTree, isInside } from "./vaultFiles.js";
 import { ProposalStore } from "./proposalStore.js";
 import { ProposalSession } from "./proposalSession.js";
+import { renderMarkdown } from "./markdownRender.js";
+import { listMarkdownFiles, noteName } from "./vaultScan.js";
 import {
   chatAppend,
   chatCreate,
@@ -84,6 +86,27 @@ async function dirExists(p: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Resolve a wikilink target (note name, or relative path, with an optional
+ * #heading) to an absolute vault path, or null. Matches Obsidian-style: by
+ * basename first (case-insensitive), then by relative path.
+ */
+async function resolveWikilink(target: string): Promise<string | null> {
+  if (!vaultRoot) return null;
+  const name = (target.split("#")[0] ?? "").trim();
+  if (!name) return null;
+  const files = await listMarkdownFiles(vaultRoot);
+  const lname = name.toLowerCase();
+  for (const f of files) {
+    if (noteName(f).toLowerCase() === lname) return f;
+  }
+  for (const f of files) {
+    const rel = path.relative(vaultRoot, f).replace(/\\/g, "/").toLowerCase();
+    if (rel === lname || rel === `${lname}.md`) return f;
+  }
+  return null;
 }
 
 function startWatcher(root: string): void {
@@ -168,6 +191,29 @@ function registerIpc(): void {
   ipcMain.handle("vault:save", (_e, p: string, text: string) =>
     saveText(p, text)
   );
+
+  // Glass-box render (5A): tokenize in main, return the safe RenderNode AST.
+  ipcMain.handle("editor:render", async (_e, source: string) => {
+    const names = vaultRoot
+      ? new Set(
+          (await listMarkdownFiles(vaultRoot)).map((f) => noteName(f).toLowerCase())
+        )
+      : new Set<string>();
+    return renderMarkdown(source, (t) =>
+      names.has(t.split("#")[0]!.trim().toLowerCase())
+    );
+  });
+
+  // Click a wikilink → resolve its target note by name/path and open it.
+  ipcMain.handle("wikilink:open", async (_e, target: string) => {
+    const p = await resolveWikilink(target);
+    return p ? openNote(p) : null;
+  });
+
+  // External links open in the system browser, never in-app (only safe schemes).
+  ipcMain.handle("link:openExternal", (_e, url: string) => {
+    if (/^(https?:|mailto:)/i.test(url)) void shell.openExternal(url);
+  });
 
   ipcMain.handle(
     "vault:resolve",

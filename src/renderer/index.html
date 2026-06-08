@@ -346,6 +346,81 @@
         border-radius: 10px;
       }
 
+      /* Read/Edit toggle */
+      .view-toggle {
+        display: inline-flex;
+        flex-shrink: 0;
+        gap: 2px;
+        padding: 2px;
+        background: var(--surface-2, rgba(0, 0, 0, 0.05));
+        border-radius: 7px;
+      }
+      .view-toggle button {
+        border: none;
+        background: transparent;
+        color: var(--text-3);
+        font-size: 11.5px;
+        padding: 3px 10px;
+        border-radius: 5px;
+        cursor: pointer;
+      }
+      .view-toggle button.on {
+        background: var(--paper, #fff);
+        color: var(--text);
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+      }
+
+      /* Rendered read view (glass box) */
+      .read-view {
+        flex: 1;
+        overflow-y: auto;
+        padding: 12px 24px 24px;
+        font-family: var(--font);
+        font-size: 15px;
+        line-height: 1.7;
+        color: var(--text);
+      }
+      .read-view h1,
+      .read-view h2,
+      .read-view h3 {
+        font-family: var(--font-display, var(--font));
+        line-height: 1.25;
+        margin: 1.1em 0 0.4em;
+      }
+      .read-view h1 { font-size: 1.7em; }
+      .read-view h2 { font-size: 1.35em; }
+      .read-view h3 { font-size: 1.15em; }
+      .read-view p { margin: 0.6em 0; }
+      .read-view ul,
+      .read-view ol { margin: 0.5em 0; padding-left: 1.4em; }
+      .read-view li { margin: 0.15em 0; }
+      .read-view blockquote {
+        margin: 0.7em 0;
+        padding: 0.1em 0 0.1em 0.9em;
+        border-left: 3px solid var(--accent);
+        color: var(--text-2);
+      }
+      .read-view pre {
+        background: var(--surface-2, rgba(0, 0, 0, 0.05));
+        padding: 12px 14px;
+        border-radius: 8px;
+        overflow-x: auto;
+      }
+      .read-view code {
+        font-family: var(--font-mono, monospace);
+        font-size: 0.9em;
+      }
+      .read-view pre code { font-size: 0.86em; }
+      .read-view a { color: var(--accent); cursor: pointer; }
+      .read-view a.wikilink {
+        text-decoration: none;
+        border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+      }
+      .read-view a.wikilink.unresolved {
+        color: var(--text-3);
+        border-bottom: 1px dashed var(--text-3);
+      }
+
       /* conflict panel (inside editor card) */
       #conflict {
         display: none;
@@ -961,6 +1036,10 @@
       <section class="card">
         <div class="ed-head">
           <span class="ed-meta" id="path">No note open</span>
+          <div class="view-toggle" id="view-toggle" hidden>
+            <button data-view="read" class="on" id="view-read">Read</button>
+            <button data-view="edit" id="view-edit">Edit</button>
+          </div>
           <span class="save-state" id="save-state"></span>
         </div>
         <textarea
@@ -970,6 +1049,7 @@
           placeholder="Select a note from your vault to start editing."
           disabled
         ></textarea>
+        <div class="read-view" id="read-view" hidden></div>
         <section id="conflict">
           <strong>This note changed on disk (e.g. Obsidian saved it).</strong>
           <span>Your unsaved edits and the on-disk version differ. Choose:</span>

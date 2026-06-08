@@ -1,4 +1,4 @@
-import type { ConflictResolution, FileNode } from "../shared/ipc.js";
+import type { ConflictResolution, FileNode, RenderNode } from "../shared/ipc.js";
 import type {
   ChatMessage,
   GroundingMeta,
@@ -281,6 +281,10 @@ function loadIntoEditor(path: string, text: string): void {
     saveTimer = null;
   }
   setSaveState("saved");
+  // A note is open → reveal the Read/Edit toggle and default to the read view
+  // (the glass box). Editing is one click away to correct the AI's brain.
+  viewToggle.hidden = false;
+  void setViewMode("read");
 }
 
 function scheduleSave(): void {
@@ -339,6 +343,97 @@ editor.addEventListener("input", () => {
 editor.addEventListener("blur", () => {
   if (currentPath && !conflicted) void doSave();
 });
+
+// ---------------------------------------------------------------------------
+// Glass-box read view (5A): rendered markdown with clickable wikilinks. The
+// editor is the audit window — Read shows the note as the AI/user sees it, Edit
+// is the raw correction surface. The render-AST is built into DOM with
+// createElement + textContent ONLY (never innerHTML), so untrusted note content
+// can never execute.
+// ---------------------------------------------------------------------------
+
+const readView = $<HTMLDivElement>("read-view");
+const viewToggle = $<HTMLDivElement>("view-toggle");
+const viewReadBtn = $<HTMLButtonElement>("view-read");
+const viewEditBtn = $<HTMLButtonElement>("view-edit");
+let viewMode: "read" | "edit" = "read";
+
+/** Build the safe render-AST into `parent` using only createElement/textContent. */
+function buildRenderNodes(nodes: RenderNode[], parent: Node): void {
+  for (const n of nodes) {
+    if (n.t === "text") {
+      parent.appendChild(document.createTextNode(n.value));
+    } else if (n.t === "br") {
+      parent.appendChild(document.createElement("br"));
+    } else if (n.t === "hr") {
+      parent.appendChild(document.createElement("hr"));
+    } else {
+      const el = document.createElement(n.tag);
+      if (n.tag === "a") {
+        if (n.wikilink !== undefined) {
+          el.className = `wikilink${n.unresolved ? " unresolved" : ""}`;
+          el.dataset.wikilink = n.wikilink;
+        } else if (n.href !== undefined) {
+          // Never a live href (no in-app navigation); routed on click instead.
+          el.dataset.href = n.href;
+        }
+      }
+      buildRenderNodes(n.children, el);
+      parent.appendChild(el);
+    }
+  }
+}
+
+async function renderReadView(): Promise<void> {
+  if (!currentPath) return;
+  const nodes = await window.secondBrain.renderMarkdown(editor.value);
+  readView.replaceChildren();
+  buildRenderNodes(nodes, readView);
+}
+
+async function setViewMode(mode: "read" | "edit"): Promise<void> {
+  viewMode = mode;
+  viewReadBtn.classList.toggle("on", mode === "read");
+  viewEditBtn.classList.toggle("on", mode === "edit");
+  if (mode === "read") {
+    // Flush pending edits so the rendered view reflects what we just saved.
+    if (currentPath && !conflicted) await doSave();
+    editor.hidden = true;
+    await renderReadView();
+    readView.hidden = false;
+  } else {
+    readView.hidden = true;
+    editor.hidden = false;
+    editor.focus();
+  }
+}
+
+viewReadBtn.addEventListener("click", () => void setViewMode("read"));
+viewEditBtn.addEventListener("click", () => void setViewMode("edit"));
+
+// Wikilink + external-link click routing — both go through IPC, never a raw href.
+readView.addEventListener("click", (e) => {
+  const target = e.target as HTMLElement;
+  const a = target.closest("a");
+  if (!a) return;
+  e.preventDefault();
+  if (a.dataset.wikilink !== undefined) {
+    void openWikilinkTarget(a.dataset.wikilink);
+  } else if (a.dataset.href !== undefined) {
+    void window.secondBrain.openExternal(a.dataset.href);
+  }
+});
+
+async function openWikilinkTarget(target: string): Promise<void> {
+  const res = await window.secondBrain.openWikilink(target);
+  if (res) {
+    showConflict(false);
+    loadIntoEditor(res.path, res.text);
+    highlightTreeRow(res.path);
+  } else {
+    setStatus(`"${target}" doesn't exist yet.`);
+  }
+}
 
 async function resolveWith(resolution: ConflictResolution): Promise<void> {
   if (!currentPath) return;

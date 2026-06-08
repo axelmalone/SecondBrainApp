@@ -13,6 +13,9 @@ const api: SecondBrainAPI = {
   save: (path, text) => ipcRenderer.invoke("vault:save", path, text),
   resolve: (path, resolution) =>
     ipcRenderer.invoke("vault:resolve", path, resolution),
+  renderMarkdown: (source) => ipcRenderer.invoke("editor:render", source),
+  openWikilink: (target) => ipcRenderer.invoke("wikilink:open", target),
+  openExternal: (url) => ipcRenderer.invoke("link:openExternal", url),
   aiStatus: () => ipcRenderer.invoke("ai:status"),
   aiSetKey: (provider, key) => ipcRenderer.invoke("ai:setKey", provider, key),
   aiSend: (req, opts) => ipcRenderer.invoke("ai:send", req, opts),
