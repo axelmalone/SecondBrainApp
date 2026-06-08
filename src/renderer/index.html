@@ -54,6 +54,9 @@
       * {
         box-sizing: border-box;
       }
+      button {
+        font-family: inherit;
+      }
       body {
         margin: 0;
         font-family: var(--font);
@@ -282,6 +285,11 @@
       }
       .editor:disabled {
         color: var(--text-3);
+      }
+      .editor:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: -2px;
+        border-radius: 10px;
       }
 
       /* conflict panel (inside editor card) */
