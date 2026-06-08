@@ -1,17 +1,27 @@
 import { GatewayError } from "../errors.js";
-import type { ChatRequest, ChatResponse, ProviderAdapter, ProviderContext } from "../types.js";
+import type {
+  ChatRequest,
+  ChatResponse,
+  ProviderAdapter,
+  ProviderContext,
+  ToolCall,
+} from "../types.js";
 import { parseJson, postJson } from "./http.js";
 
 const ENDPOINT = "https://api.anthropic.com/v1/messages";
 const API_VERSION = "2023-06-01";
 const DEFAULT_MAX_TOKENS = 1024;
 
-interface AnthropicTextBlock {
+interface AnthropicContentBlock {
   type: string;
   text?: string;
+  // tool_use blocks:
+  id?: string;
+  name?: string;
+  input?: unknown;
 }
 interface AnthropicResponse {
-  content?: AnthropicTextBlock[];
+  content?: AnthropicContentBlock[];
   stop_reason?: string;
   usage?: { input_tokens?: number; output_tokens?: number };
 }
@@ -54,6 +64,13 @@ export const anthropicAdapter: ProviderAdapter = {
     };
     if (system.length > 0) body.system = system;
     if (req.temperature !== undefined) body.temperature = req.temperature;
+    if (req.tools && req.tools.length > 0) {
+      body.tools = req.tools.map((t) => ({
+        name: t.name,
+        description: t.description,
+        input_schema: t.inputSchema,
+      }));
+    }
 
     const res = await postJson(
       ctx,
@@ -70,20 +87,30 @@ export const anthropicAdapter: ProviderAdapter = {
       throw new GatewayError("Refusal", { status: res.status });
     }
 
-    const text = (json.content ?? [])
+    if (!json.content || json.content.length === 0) {
+      throw new GatewayError("BadResponse", { status: res.status });
+    }
+
+    const text = json.content
       .filter((b) => b.type === "text" && typeof b.text === "string")
       .map((b) => b.text as string)
       .join("");
 
-    if (!json.content || json.content.length === 0) {
-      throw new GatewayError("BadResponse", { status: res.status });
-    }
+    // tool_use blocks (stop_reason "tool_use") carry the structured proposal.
+    const toolCalls: ToolCall[] = json.content
+      .filter((b) => b.type === "tool_use" && typeof b.name === "string")
+      .map((b) => {
+        const call: ToolCall = { name: b.name as string, input: b.input };
+        if (typeof b.id === "string") call.id = b.id;
+        return call;
+      });
 
     const response: ChatResponse = {
       provider: "anthropic",
       model: req.model.model,
       text,
     };
+    if (toolCalls.length > 0) response.toolCalls = toolCalls;
     if (json.usage) {
       response.usage = {
         inputTokens: json.usage.input_tokens ?? 0,

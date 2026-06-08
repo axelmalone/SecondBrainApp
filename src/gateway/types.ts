@@ -11,6 +11,8 @@ export type {
   ChatRequest,
   ChatResponse,
   TokenUsage,
+  ToolSpec,
+  ToolCall,
 } from "../shared/ai.js";
 
 /** The subset of fetch the adapters use; injectable so tests need no network. */

@@ -22,6 +22,14 @@ export type { Logger } from "./redaction.js";
 export { anthropicAdapter } from "./providers/anthropic.js";
 export { openaiAdapter } from "./providers/openai.js";
 
+export { parseProposal, validateProposalDraft } from "./parseProposal.js";
+export {
+  runProposalTurn,
+  type ProposalTurnGateway,
+  type ProposalTurnResult,
+} from "./propose.js";
+export { proposalPolicyMessage } from "./proposalPrompt.js";
+
 export type {
   ProviderAdapter,
   ProviderContext,

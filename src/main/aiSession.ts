@@ -3,6 +3,9 @@ import { KeyStore } from "../gateway/keyStore.js";
 import { anthropicAdapter } from "../gateway/providers/anthropic.js";
 import { openaiAdapter } from "../gateway/providers/openai.js";
 import { createScrubbingLogger, toSafeError } from "../gateway/redaction.js";
+import { runProposalTurn } from "../gateway/propose.js";
+import { proposalPolicyMessage } from "../gateway/proposalPrompt.js";
+import type { ProposalDraft, StoredProposal } from "../shared/proposal.js";
 import { GroundingService } from "../grounding/vaultIndexer.js";
 import { TransformersEmbedder } from "../grounding/embedderTransformers.js";
 import { ElectronKeychain } from "./keychainElectron.js";
@@ -22,6 +25,21 @@ import type {
 let keyStore: KeyStore | null = null;
 let gateway: ModelGateway | null = null;
 let grounder: GroundingService | null = null;
+
+/**
+ * Sink that persists a parsed proposal into the proposal store and returns the
+ * stored record (or null if the proposal was rejected, e.g. an unsafe path).
+ * Wired by the main bootstrap so this module needs no proposalSession import —
+ * the same decoupling pattern as setOnSaved on vaultSession.
+ */
+type ProposalSink = (
+  draft: ProposalDraft,
+  backref: { chatId: string; turnTs: number }
+) => Promise<StoredProposal | null>;
+let proposalSink: ProposalSink | null = null;
+export function setProposalSink(sink: ProposalSink): void {
+  proposalSink = sink;
+}
 
 /**
  * Build the AI layer at app start. This MUST NOT throw — a broken keychain or a
@@ -146,9 +164,30 @@ export async function aiSend(
 ): Promise<AiSendResult> {
   if (!gateway) return { ok: false, error: { variant: "AuthFailed" } };
   const { messages, grounding } = await applyGrounding(req, opts);
+  // Prompt ordering (see proposalPrompt.ts): stable policy FIRST, then the
+  // dynamic grounding excerpts inside `messages`, then the conversation.
+  const fullMessages = [proposalPolicyMessage(), ...messages];
   try {
-    const response = await gateway.call({ ...req, messages });
-    return { ok: true, response, grounding };
+    const { parsed, response } = await runProposalTurn(gateway, {
+      ...req,
+      messages: fullMessages,
+    });
+    // The user sees the cleaned text (proposal block stripped on the fallback path).
+    const cleanResponse = { ...response, text: parsed.text };
+
+    let stored: StoredProposal | null = null;
+    if (parsed.proposal && proposalSink && opts?.chatId && opts.turnTs !== undefined) {
+      // Persisting runs the mandatory isInside(root)+.md security check; an
+      // unsafe path returns null and the proposal is simply never queued.
+      stored = await proposalSink(parsed.proposal, {
+        chatId: opts.chatId,
+        turnTs: opts.turnTs,
+      });
+    }
+
+    return stored
+      ? { ok: true, response: cleanResponse, grounding, proposal: stored }
+      : { ok: true, response: cleanResponse, grounding };
   } catch (err) {
     // The single redaction boundary: only {variant, status} crosses IPC.
     return { ok: false, error: toSafeError(err) };

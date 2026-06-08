@@ -491,6 +491,8 @@ function humanError(err: SafeError): string {
       return "The model declined to answer this request.";
     case "BadResponse":
       return "The provider returned an unexpected response.";
+    case "MalformedProposal":
+      return "The model tried to edit a note but its proposal was malformed. Nothing was changed.";
   }
 }
 
