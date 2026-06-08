@@ -9,46 +9,98 @@
     <title>Second Brain</title>
     <style>
       /* ===========================================================
-         "Cards" — softer, consumer, Apple-like. Grouped cards float
-         on a tinted canvas. Light/dark adaptive. Left: collapsible
-         vault file tree. Center: editor (autosaves). Right: chat.
-         Grounding is always on; a calm status line + per-answer
-         badges report honestly.
+         "The Annotated Brain" — see DESIGN.md. Fraunces (voice) +
+         Geist (body/editor) + Geist Mono. Single evergreen accent on
+         warm-linen paper (light) or real near-black (dark). Self-hosted
+         fonts (offline-first, CSP-safe). Theme is a manual toggle that
+         persists; falls back to prefers-color-scheme before JS runs.
          =========================================================== */
-      :root {
-        color-scheme: light dark;
-        --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui,
-          sans-serif;
-        --mono: ui-monospace, "SF Mono", Menlo, monospace;
-        --accent: #007aff;
-        --canvas: #eef0f4;
-        --card: #ffffff;
-        --text: #1d1d1f;
-        --text-2: #6e6e73;
-        --text-3: #a1a1a6;
-        --hair: rgba(0, 0, 0, 0.07);
-        --hover: rgba(0, 0, 0, 0.045);
-        --sel: rgba(0, 122, 255, 0.1);
-        --bubble: #f2f3f7;
-        --green: #34c759;
-        --amber: #ff9500;
-        --red: #ff3b30;
-        --shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 8px 24px rgba(0, 0, 0, 0.05);
+      @font-face {
+        font-family: "Fraunces";
+        src: url("./fonts/fraunces-latin-wght-normal.woff2") format("woff2");
+        font-weight: 100 900;
+        font-style: normal;
+        font-display: swap;
       }
+      @font-face {
+        font-family: "Fraunces";
+        src: url("./fonts/fraunces-latin-wght-italic.woff2") format("woff2");
+        font-weight: 100 900;
+        font-style: italic;
+        font-display: swap;
+      }
+      @font-face {
+        font-family: "Geist";
+        src: url("./fonts/geist-latin-wght-normal.woff2") format("woff2");
+        font-weight: 100 900;
+        font-style: normal;
+        font-display: swap;
+      }
+      @font-face {
+        font-family: "Geist Mono";
+        src: url("./fonts/geist-mono-latin-wght-normal.woff2") format("woff2");
+        font-weight: 100 900;
+        font-style: normal;
+        font-display: swap;
+      }
+      :root {
+        color-scheme: light;
+        --serif: "Fraunces", Georgia, "Times New Roman", serif;
+        --font: "Geist", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+        --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+        /* Light — "Cool Linen" */
+        --accent: #0f6e5a;
+        --canvas: #f6f6f3;
+        --card: #ffffff;
+        --text: #1b1b18;
+        --text-2: #5a5852;
+        --text-3: #918f86;
+        --hair: rgba(27, 27, 24, 0.11);
+        --hover: rgba(27, 27, 24, 0.045);
+        --sel: rgba(15, 110, 90, 0.1);
+        --bubble: #efefe9;
+        --green: #0f6e5a;
+        --amber: #b8430f;
+        --red: #d6453a;
+        --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 10px 30px rgba(0, 0, 0, 0.05);
+      }
+      /* Real dark — near-black paper, lifted surfaces (see DESIGN.md) */
+      :root[data-theme="dark"] {
+        color-scheme: dark;
+        --accent: #15795f;
+        --canvas: #0c0d0f;
+        --card: #141519;
+        --text: #f1efe8;
+        --text-2: #9d9a90;
+        --text-3: #6a6860;
+        --hair: rgba(241, 239, 232, 0.11);
+        --hover: rgba(241, 239, 232, 0.05);
+        --sel: rgba(21, 121, 95, 0.22);
+        --bubble: #1c1d22;
+        --green: #15795f;
+        --amber: #ec8a52;
+        --red: #ff6b5e;
+        --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 12px 34px rgba(0, 0, 0, 0.45);
+      }
+      /* Flash-free first paint for system-dark users before the script
+         sets an explicit data-theme. Same values as the explicit dark. */
       @media (prefers-color-scheme: dark) {
-        :root {
-          --accent: #0a84ff;
-          --canvas: #121214;
-          --card: #1f1f22;
-          --text: #f5f5f7;
-          --text-2: #a1a1a6;
-          --text-3: #6e6e73;
-          --hair: rgba(255, 255, 255, 0.08);
-          --hover: rgba(255, 255, 255, 0.06);
-          --sel: rgba(10, 132, 255, 0.2);
-          --bubble: #2b2b2e;
-          --red: #ff453a;
-          --shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 8px 28px rgba(0, 0, 0, 0.3);
+        :root:not([data-theme]) {
+          color-scheme: dark;
+          --accent: #15795f;
+          --canvas: #0c0d0f;
+          --card: #141519;
+          --text: #f1efe8;
+          --text-2: #9d9a90;
+          --text-3: #6a6860;
+          --hair: rgba(241, 239, 232, 0.11);
+          --hover: rgba(241, 239, 232, 0.05);
+          --sel: rgba(21, 121, 95, 0.22);
+          --bubble: #1c1d22;
+          --green: #15795f;
+          --amber: #ec8a52;
+          --red: #ff6b5e;
+          --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 12px 34px rgba(0, 0, 0, 0.45);
         }
       }
       * {
@@ -67,6 +119,7 @@
         flex-direction: column;
         font-size: 13px;
         -webkit-font-smoothing: antialiased;
+        transition: background 0.3s ease, color 0.3s ease;
       }
 
       /* top bar */
@@ -79,8 +132,9 @@
         flex-shrink: 0;
       }
       .bar .brand {
-        font-weight: 700;
-        font-size: 14px;
+        font-family: var(--serif);
+        font-weight: 600;
+        font-size: 17px;
         letter-spacing: -0.01em;
       }
       .bar .spacer {
@@ -277,9 +331,9 @@
         outline: none;
         resize: none;
         padding: 12px 24px 24px;
-        font-family: var(--mono);
-        font-size: 14px;
-        line-height: 1.6;
+        font-family: var(--font);
+        font-size: 15px;
+        line-height: 1.7;
         background: transparent;
         color: var(--text);
       }
@@ -665,10 +719,12 @@
         background: var(--hover);
       }
       .badge.grounded {
-        background: rgba(52, 199, 89, 0.18);
+        background: var(--sel);
+        color: var(--accent);
       }
       .badge.ungrounded {
-        background: rgba(255, 149, 0, 0.18);
+        background: color-mix(in srgb, var(--amber) 16%, transparent);
+        color: var(--amber);
       }
       .msg .usage {
         display: block;
@@ -678,6 +734,75 @@
       }
       .msg.user .usage {
         color: rgba(255, 255, 255, 0.8);
+      }
+
+      /* provenance: inline [n] citations + sidenotes under a grounded answer */
+      .msg .cite {
+        font-family: var(--mono);
+        font-size: 9px;
+        font-weight: 600;
+        color: #fff;
+        background: var(--accent);
+        border-radius: 4px;
+        padding: 0 4px;
+        margin-left: 2px;
+        vertical-align: super;
+        line-height: 1.4;
+        cursor: pointer;
+        user-select: none;
+      }
+      .msg .cite:hover {
+        opacity: 0.82;
+      }
+      .msg .sidenotes {
+        margin-top: 10px;
+        padding-top: 10px;
+        border-top: 1px solid var(--hair);
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .sn-head {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--accent);
+        margin-bottom: 2px;
+      }
+      .sidenote {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        width: 100%;
+        text-align: left;
+        border: none;
+        background: transparent;
+        padding: 4px 5px;
+        border-radius: 7px;
+        cursor: pointer;
+      }
+      .sidenote:hover {
+        background: var(--hover);
+      }
+      .sn-num {
+        flex-shrink: 0;
+        font-family: var(--mono);
+        font-size: 10px;
+        font-weight: 600;
+        color: #fff;
+        background: var(--accent);
+        border-radius: 4px;
+        padding: 1px 5px;
+        line-height: 1.5;
+      }
+      .sn-src {
+        font-size: 12px;
+        color: var(--accent);
+        line-height: 1.5;
+        word-break: break-word;
+      }
+      .sn-src::before {
+        content: "↳ ";
+        color: var(--text-3);
       }
 
       /* composer */
@@ -759,8 +884,9 @@
       }
       .modal-title {
         margin: 4px 0 8px;
-        font-size: 18px;
-        font-weight: 700;
+        font-family: var(--serif);
+        font-size: 22px;
+        font-weight: 600;
         letter-spacing: -0.01em;
       }
       .modal-sub {
@@ -812,6 +938,9 @@
       <button class="icon-btn" id="collapse-side" title="Toggle file tree">☰</button>
       <span class="brand">Second Brain</span>
       <span class="spacer"></span>
+      <button class="icon-btn" id="theme-toggle" title="Toggle light / dark">
+        ◐
+      </button>
     </div>
 
     <div class="grid">

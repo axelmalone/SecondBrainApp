@@ -152,4 +152,17 @@ describe("buildContext", () => {
     expect(out).toContain("n.md › Goals");
     expect(out).toContain("ship M1");
   });
+
+  it("numbers excerpts [1]..[n] so the model can cite them by index", () => {
+    const out = buildContext([
+      { id: "a#0", notePath: "a.md", text: "first", score: 0.9 },
+      { id: "b#0", notePath: "b.md", text: "second", score: 0.8 },
+    ]);
+    // Each excerpt is prefixed with its 1-based citation number; the renderer
+    // maps an inline [n] back to sources[n-1], so this alignment is a contract.
+    expect(out).toContain("[1] a.md");
+    expect(out).toContain("[2] b.md");
+    // And the model is told to cite inline.
+    expect(out.toLowerCase()).toContain("cite it inline");
+  });
 });

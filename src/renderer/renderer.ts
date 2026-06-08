@@ -2,6 +2,7 @@ import type { ConflictResolution, FileNode } from "../shared/ipc.js";
 import type {
   ChatMessage,
   GroundingMeta,
+  GroundingSource,
   GroundingUnavailableReason,
   ProviderId,
   SafeError,
@@ -76,6 +77,46 @@ document.addEventListener("click", () => closePopovers());
 collapseBtn.addEventListener("click", () =>
   document.body.classList.toggle("side-collapsed")
 );
+
+// ---------------------------------------------------------------------------
+// Light / dark theme. A manual toggle that persists (localStorage). Until the
+// user picks explicitly, we follow the OS (prefers-color-scheme) live. The CSS
+// already renders system-dark before this script runs, so there's no flash.
+// ---------------------------------------------------------------------------
+
+const themeToggle = $<HTMLButtonElement>("theme-toggle");
+const THEME_KEY = "sb.theme";
+const systemDark = window.matchMedia("(prefers-color-scheme: dark)");
+
+type Theme = "light" | "dark";
+
+function resolvedTheme(): Theme {
+  const stored = localStorage.getItem(THEME_KEY);
+  if (stored === "light" || stored === "dark") return stored;
+  return systemDark.matches ? "dark" : "light";
+}
+
+function applyTheme(theme: Theme): void {
+  document.documentElement.dataset.theme = theme;
+  // ◐ = currently light (click for dark); ◑ = currently dark (click for light).
+  themeToggle.textContent = theme === "dark" ? "◑" : "◐";
+  themeToggle.title =
+    theme === "dark" ? "Switch to light" : "Switch to dark";
+}
+
+applyTheme(resolvedTheme());
+
+themeToggle.addEventListener("click", () => {
+  const next: Theme =
+    document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  localStorage.setItem(THEME_KEY, next);
+  applyTheme(next);
+});
+
+// While the user hasn't chosen explicitly, track the OS preference.
+systemDark.addEventListener("change", () => {
+  if (!localStorage.getItem(THEME_KEY)) applyTheme(resolvedTheme());
+});
 
 vaultMenuBtn.addEventListener("click", (e) => {
   e.stopPropagation();
@@ -152,16 +193,33 @@ function renderNode(node: FileNode, depth: number): HTMLElement {
 
   const row = document.createElement("div");
   row.className = "tree-row file";
+  row.dataset.path = node.path;
   row.style.paddingLeft = `${8 + depth * 14}px`;
   const name = document.createElement("span");
   name.className = "tree-name";
   name.textContent = node.name.replace(/\.(md|markdown)$/i, "");
   row.appendChild(name);
-  row.addEventListener("click", () => void openFromTree(node.path, row));
+  row.addEventListener("click", () => void openNoteByPath(node.path));
   return row;
 }
 
-async function openFromTree(path: string, row: HTMLElement): Promise<void> {
+function highlightTreeRow(path: string): void {
+  for (const r of Array.from(
+    fileTreeEl.querySelectorAll(".tree-row.file.active")
+  ))
+    r.classList.remove("active");
+  const match = fileTreeEl.querySelector<HTMLElement>(
+    `.tree-row.file[data-path="${CSS.escape(path)}"]`
+  );
+  match?.classList.add("active");
+}
+
+/**
+ * Open a note in the editor by absolute path. Shared by the file tree and by
+ * provenance sidenotes (clicking a source under a grounded answer). Flushes any
+ * pending edits first, then highlights the matching tree row if it's visible.
+ */
+async function openNoteByPath(path: string): Promise<void> {
   // Flush any pending edits on the note we're leaving before switching.
   if (currentPath && !conflicted) await doSave();
   const result = await window.secondBrain.openPath(path);
@@ -171,11 +229,7 @@ async function openFromTree(path: string, row: HTMLElement): Promise<void> {
   }
   showConflict(false);
   loadIntoEditor(result.path, result.text);
-  for (const r of Array.from(
-    fileTreeEl.querySelectorAll(".tree-row.file.active")
-  ))
-    r.classList.remove("active");
-  row.classList.add("active");
+  highlightTreeRow(result.path);
 }
 
 // ---------------------------------------------------------------------------
@@ -454,16 +508,115 @@ const UNGROUNDED_REASON: Record<GroundingUnavailableReason, string> = {
 function makeBadge(grounding: GroundingMeta): HTMLSpanElement {
   const badge = document.createElement("span");
   if (grounding.grounded) {
-    const names = grounding.sources
-      .map((s) => s.notePath.split("/").pop() ?? s.notePath)
-      .join(", ");
+    const names = uniqueNoteNames(grounding.sources).join(", ");
     badge.className = "badge grounded";
-    badge.textContent = `grounded · ${grounding.sources.length} note(s): ${names}`;
+    badge.textContent = `grounded · ${names}`;
   } else {
     badge.className = "badge ungrounded";
     badge.textContent = `answering without vault context (${UNGROUNDED_REASON[grounding.reason]})`;
   }
   return badge;
+}
+
+// ---------------------------------------------------------------------------
+// Provenance sidenotes. A grounded answer cites its sources inline with [n]
+// markers (see buildContext). We render each [n] as a clickable superscript and
+// list the cited notes as sidenotes beneath the answer — click either to open
+// the source note in the editor. This is the product's whole promise made
+// visible: the AI shows its receipts, and you can verify them.
+// ---------------------------------------------------------------------------
+
+const CITE_RE = /\[(\d+)\]/g;
+
+/** A note's display name: the filename without the .md extension. */
+function noteName(notePath: string): string {
+  const base = notePath.split("/").pop() ?? notePath;
+  return base.replace(/\.(md|markdown)$/i, "");
+}
+
+/** Unique note display names, preserving first-seen order. */
+function uniqueNoteNames(sources: readonly GroundingSource[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const s of sources) {
+    if (seen.has(s.notePath)) continue;
+    seen.add(s.notePath);
+    out.push(noteName(s.notePath));
+  }
+  return out;
+}
+
+/** A clickable sidenote row: number chip + source name → opens the note. */
+function makeSidenote(n: number, source: GroundingSource): HTMLButtonElement {
+  const row = document.createElement("button");
+  row.className = "sidenote";
+  row.dataset.path = source.notePath;
+
+  const num = document.createElement("span");
+  num.className = "sn-num";
+  num.textContent = String(n);
+
+  const src = document.createElement("span");
+  src.className = "sn-src";
+  src.textContent = source.heading
+    ? `${noteName(source.notePath)} › ${source.heading}`
+    : noteName(source.notePath);
+
+  row.append(num, src);
+  row.addEventListener("click", () => void openNoteByPath(source.notePath));
+  return row;
+}
+
+/**
+ * Render a grounded assistant answer: the text with inline [n] markers turned
+ * into clickable citations, followed by a sidenote list of the cited sources.
+ * Built entirely from text nodes / elements (never innerHTML) so it stays
+ * XSS-safe — the model's text is untrusted.
+ */
+function renderGroundedAnswer(
+  el: HTMLElement,
+  text: string,
+  sources: readonly GroundingSource[]
+): void {
+  const cited: number[] = []; // citation numbers in first-seen order
+  const inRange = (n: number): boolean => n >= 1 && n <= sources.length;
+
+  let last = 0;
+  for (const m of text.matchAll(CITE_RE)) {
+    const idx = m.index ?? 0;
+    const n = Number(m[1]);
+    // Plain text before this marker.
+    if (idx > last) el.appendChild(document.createTextNode(text.slice(last, idx)));
+    if (inRange(n)) {
+      const sup = document.createElement("sup");
+      sup.className = "cite";
+      sup.textContent = String(n);
+      const s = sources[n - 1]!;
+      sup.title = noteName(s.notePath);
+      sup.addEventListener("click", () => void openNoteByPath(s.notePath));
+      el.appendChild(sup);
+      if (!cited.includes(n)) cited.push(n);
+    } else {
+      // Out-of-range marker: keep it literally, don't silently drop content.
+      el.appendChild(document.createTextNode(m[0]));
+    }
+    last = idx + m[0].length;
+  }
+  if (last < text.length) el.appendChild(document.createTextNode(text.slice(last)));
+
+  // Sidenotes: the cited sources, or — if the model cited nothing inline — all
+  // sources, so provenance is always shown.
+  const shown = cited.length > 0 ? cited : sources.map((_, i) => i + 1);
+
+  const box = document.createElement("div");
+  box.className = "sidenotes";
+  const head = document.createElement("div");
+  head.className = "sn-head";
+  const noteCount = uniqueNoteNames(shown.map((n) => sources[n - 1]!)).length;
+  head.textContent = `Grounded in ${noteCount} note${noteCount === 1 ? "" : "s"}`;
+  box.appendChild(head);
+  for (const n of shown) box.appendChild(makeSidenote(n, sources[n - 1]!));
+  el.appendChild(box);
 }
 
 // A transient "assistant is typing" bubble shown in the conversation itself
@@ -499,8 +652,15 @@ function appendMessage(
 ): void {
   const el = document.createElement("div");
   el.className = `msg ${role}`;
-  el.textContent = text;
-  if (extras?.grounding) el.appendChild(makeBadge(extras.grounding));
+  const g = extras?.grounding;
+  if (role === "assistant" && g?.grounded && g.sources.length > 0) {
+    // Grounded answers render inline citations + provenance sidenotes instead
+    // of a flat badge (the sidenotes carry the "grounded in N notes" header).
+    renderGroundedAnswer(el, text, g.sources);
+  } else {
+    el.textContent = text;
+    if (g) el.appendChild(makeBadge(g));
+  }
   if (extras?.usage) {
     const u = document.createElement("span");
     u.className = "usage";

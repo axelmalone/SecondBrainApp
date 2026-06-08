@@ -19,14 +19,21 @@ const DEFAULT_MIN_SCORE = 0.2;
  * the prompt level, not just the UI.
  */
 export function buildContext(chunks: readonly ScoredChunk[]): string {
-  const blocks = chunks.map((c) => {
+  // Each excerpt is numbered [1]..[n] so the model can cite the exact source it
+  // leaned on. The renderer turns those [n] markers into clickable sidenotes
+  // that open the note — provenance the user can verify.
+  const blocks = chunks.map((c, i) => {
     const label = c.heading ? `${c.notePath} › ${c.heading}` : c.notePath;
-    return `[${label}]\n${c.text}`;
+    return `[${i + 1}] ${label}\n${c.text}`;
   });
   return [
     "You are answering using excerpts from the user's personal notes (their vault).",
     "Use the excerpts below when they are relevant. If they do not contain the answer,",
     "say so plainly rather than inventing one.",
+    "",
+    "When a statement draws on an excerpt, cite it inline with its bracketed number",
+    "right after the statement, e.g. [1] or [2][3]. Only cite excerpts you actually",
+    "used, and use the exact numbers shown below.",
     "",
     "--- BEGIN VAULT EXCERPTS ---",
     blocks.join("\n\n"),
