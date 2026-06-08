@@ -527,12 +527,20 @@ function renderChatList(): void {
     const title = document.createElement("span");
     title.className = "title";
     title.textContent = chat.title;
-    title.title = "Double-click to rename";
-    title.addEventListener("dblclick", (e) => {
+    title.title = chat.title;
+    item.appendChild(title);
+
+    // Dedicated rename affordance. stopPropagation keeps the item's click
+    // (select + close popover) from firing, so the inline input stays visible.
+    const ren = document.createElement("button");
+    ren.className = "ren";
+    ren.textContent = "✎";
+    ren.title = "Rename chat";
+    ren.addEventListener("click", (e) => {
       e.stopPropagation();
       startRename(chat, title, item);
     });
-    item.appendChild(title);
+    item.appendChild(ren);
 
     const del = document.createElement("button");
     del.className = "del";
@@ -668,6 +676,9 @@ async function refreshGroundingStatus(): Promise<void> {
     indexBtn.classList.add("cta");
     indexBtn.textContent = "Index your vault";
   }
+  // The status line truncates in the narrow chat column; mirror it into a
+  // tooltip so the full text is readable on hover.
+  groundState.title = groundState.textContent ?? "";
 }
 
 indexBtn.addEventListener("click", async () => {
