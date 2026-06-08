@@ -399,7 +399,34 @@ async function renderReadView(): Promise<void> {
   buildRenderNodes(nodes, readView);
 }
 
-async function setViewMode(mode: "read" | "edit"): Promise<void> {
+/** How far down a scrollable element is, 0..1 of its scrollable distance. */
+function scrollFractionOf(el: HTMLElement): number {
+  const max = el.scrollHeight - el.clientHeight;
+  return max > 0 ? el.scrollTop / max : 0;
+}
+
+/** Scroll `el` to the same relative position. Read and Edit have different
+ *  heights (rendered vs raw), so we map by fraction — you land on the same
+ *  region of text, not the top. */
+function applyScrollFraction(el: HTMLElement, fraction: number): void {
+  const max = el.scrollHeight - el.clientHeight;
+  el.scrollTop = max > 0 ? Math.round(fraction * max) : 0;
+}
+
+async function setViewMode(
+  mode: "read" | "edit",
+  opts: { preserveScroll?: boolean } = {}
+): Promise<void> {
+  // Clicking the already-active segment is a no-op (don't re-render / jump).
+  if (mode === viewMode && opts.preserveScroll) return;
+
+  // Capture where the user was in the view they're leaving, so switching keeps
+  // them at the same spot. On a fresh note load (no preserveScroll) we start at
+  // the top instead.
+  const fraction = opts.preserveScroll
+    ? scrollFractionOf(viewMode === "edit" ? editor : readView)
+    : 0;
+
   viewMode = mode;
   viewReadBtn.classList.toggle("on", mode === "read");
   viewEditBtn.classList.toggle("on", mode === "edit");
@@ -409,15 +436,18 @@ async function setViewMode(mode: "read" | "edit"): Promise<void> {
     editor.hidden = true;
     await renderReadView();
     readView.hidden = false;
+    applyScrollFraction(readView, fraction);
   } else {
     readView.hidden = true;
     editor.hidden = false;
     editor.focus();
+    // After focus (which can scroll to the caret) so our position wins.
+    applyScrollFraction(editor, fraction);
   }
 }
 
-viewReadBtn.addEventListener("click", () => void setViewMode("read"));
-viewEditBtn.addEventListener("click", () => void setViewMode("edit"));
+viewReadBtn.addEventListener("click", () => void setViewMode("read", { preserveScroll: true }));
+viewEditBtn.addEventListener("click", () => void setViewMode("edit", { preserveScroll: true }));
 
 // Wikilink + external-link click routing — both go through IPC, never a raw href.
 readView.addEventListener("click", (e) => {

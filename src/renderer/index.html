@@ -522,28 +522,12 @@
         text-decoration: underline;
       }
 
-      /* Read/Edit toggle */
-      .view-toggle {
-        display: inline-flex;
-        flex-shrink: 0;
-        gap: 2px;
-        padding: 2px;
-        background: var(--surface-2, rgba(0, 0, 0, 0.05));
-        border-radius: 7px;
-      }
+      /* Read/Edit toggle — reuses the .segmented control (same as the provider
+         picker), so it follows the palette: subtle --card raise on the active
+         segment, never an accent fill. Just a touch denser for the editor head. */
       .view-toggle button {
-        border: none;
-        background: transparent;
-        color: var(--text-3);
         font-size: 11.5px;
-        padding: 3px 10px;
-        border-radius: 5px;
-        cursor: pointer;
-      }
-      .view-toggle button.on {
-        background: var(--paper, #fff);
-        color: var(--text);
-        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+        padding: 3px 11px;
       }
 
       /* Rendered read view (glass box) */
@@ -1220,7 +1204,7 @@
       <section class="card">
         <div class="ed-head">
           <span class="ed-meta" id="path">No note open</span>
-          <div class="view-toggle" id="view-toggle" hidden>
+          <div class="segmented view-toggle" id="view-toggle" hidden>
             <button data-view="read" class="on" id="view-read">Read</button>
             <button data-view="edit" id="view-edit">Edit</button>
           </div>
