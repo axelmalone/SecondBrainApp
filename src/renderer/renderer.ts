@@ -117,7 +117,7 @@ const providerBar = $<HTMLDivElement>("provider");
 const providerButtons = Array.from(
   providerBar.querySelectorAll<HTMLButtonElement>("button[data-provider]")
 );
-const modelInput = $<HTMLInputElement>("model");
+const modelSelect = $<HTMLSelectElement>("model");
 const settingsToggle = $<HTMLButtonElement>("settings-toggle");
 const settingsPanel = $<HTMLElement>("settings");
 const keyState = $<HTMLDivElement>("key-state");
@@ -132,11 +132,39 @@ const groundDot = $<HTMLSpanElement>("ground-dot");
 const chatListEl = $<HTMLDivElement>("chat-list");
 const newChatBtn = $<HTMLButtonElement>("new-chat");
 
-// Sensible default model per provider; the user can edit it freely.
-const DEFAULT_MODEL: Record<ProviderId, string> = {
-  anthropic: "claude-sonnet-4-5-20250929",
-  openai: "gpt-4o",
+// Curated model list per provider. First entry is the default selection.
+// Edit here to add/remove models — the dropdown is built from this.
+interface ModelOption {
+  id: string;
+  label: string;
+}
+const MODELS: Record<ProviderId, ModelOption[]> = {
+  anthropic: [
+    { id: "claude-sonnet-4-5-20250929", label: "Claude Sonnet 4.5" },
+    { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
+    { id: "claude-opus-4-6", label: "Claude Opus 4.6" },
+    { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
+  ],
+  openai: [
+    { id: "gpt-4o", label: "GPT-4o" },
+    { id: "gpt-4o-mini", label: "GPT-4o mini" },
+    { id: "gpt-4-turbo", label: "GPT-4 Turbo" },
+    { id: "o1", label: "o1" },
+    { id: "o1-mini", label: "o1-mini" },
+  ],
 };
+
+// Rebuild the dropdown for a provider; the browser selects the first option,
+// which is our intended default.
+function populateModels(id: ProviderId): void {
+  modelSelect.replaceChildren();
+  for (const m of MODELS[id]) {
+    const opt = document.createElement("option");
+    opt.value = m.id;
+    opt.textContent = m.label;
+    modelSelect.appendChild(opt);
+  }
+}
 
 // The active chat: its id and the running transcript sent to the gateway each
 // turn (multi-turn context). Switching chats swaps both out.
@@ -158,7 +186,7 @@ function setProvider(id: ProviderId): void {
   for (const btn of providerButtons) {
     btn.classList.toggle("on", btn.dataset.provider === id);
   }
-  modelInput.value = DEFAULT_MODEL[id];
+  populateModels(id);
   void refreshAiStatus();
 }
 
@@ -210,6 +238,29 @@ function makeBadge(grounding: GroundingMeta): HTMLSpanElement {
     badge.textContent = `answering without vault context (${UNGROUNDED_REASON[grounding.reason]})`;
   }
   return badge;
+}
+
+// A transient "assistant is typing" bubble shown in the conversation itself
+// while the (slow) model call is in flight — the bottom status strip is too far
+// from the chat to read as live feedback. Removed before the real answer lands.
+let thinkingEl: HTMLDivElement | null = null;
+
+function showThinking(): void {
+  hideThinking();
+  const el = document.createElement("div");
+  el.className = "msg assistant thinking";
+  const dots = document.createElement("span");
+  dots.className = "typing";
+  for (let i = 0; i < 3; i++) dots.appendChild(document.createElement("span"));
+  el.appendChild(dots);
+  messagesEl.appendChild(el);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  thinkingEl = el;
+}
+
+function hideThinking(): void {
+  thinkingEl?.remove();
+  thinkingEl = null;
 }
 
 function appendMessage(
@@ -405,6 +456,7 @@ async function send(): Promise<void> {
   }
 
   promptEl.value = "";
+  autoGrowPrompt();
   transcript.push({ role: "user", content: text });
   appendMessage("user", text);
   // Persist the user turn immediately, before the (slow, fallible) model call,
@@ -416,15 +468,17 @@ async function send(): Promise<void> {
   });
   await refreshChatList(); // title/order update from the first user message
   setStatus("Thinking…");
+  showThinking();
 
   const res = await window.secondBrain.aiSend(
     {
-      model: { provider: currentProvider(), model: modelInput.value.trim() },
+      model: { provider: currentProvider(), model: modelSelect.value },
       messages: transcript,
     },
     { ground: true }
   );
 
+  hideThinking();
   if (res.ok) {
     transcript.push({ role: "assistant", content: res.response.text });
     const extras: Parameters<typeof appendMessage>[2] = {
@@ -454,6 +508,15 @@ async function send(): Promise<void> {
 
 sendBtn.addEventListener("click", () => void send());
 
+// Grow the composer with its content up to the CSS max-height (then it scrolls).
+// rows="1" + max-height alone never expands a textarea; this drives the height.
+function autoGrowPrompt(): void {
+  promptEl.style.height = "auto";
+  promptEl.style.height = `${Math.min(promptEl.scrollHeight, 120)}px`;
+}
+
+promptEl.addEventListener("input", autoGrowPrompt);
+
 promptEl.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
@@ -468,6 +531,7 @@ async function initChats(): Promise<void> {
   else await newChat();
 }
 
+populateModels(providerId);
 void refreshAiStatus();
 void refreshGroundingStatus();
 void initChats();
