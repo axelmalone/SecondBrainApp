@@ -6,8 +6,9 @@ import { createScrubbingLogger, toSafeError } from "../gateway/redaction.js";
 import { runProposalTurn } from "../gateway/propose.js";
 import { proposalPolicyMessage } from "../gateway/proposalPrompt.js";
 import type { ProposalDraft, StoredProposal } from "../shared/proposal.js";
+import * as path from "node:path";
 import { GroundingService } from "../grounding/vaultIndexer.js";
-import { TransformersEmbedder } from "../grounding/embedderTransformers.js";
+import { ChildProcessEmbedder } from "../grounding/childEmbedder.js";
 import { ElectronKeychain } from "./keychainElectron.js";
 import type {
   AiIndexResult,
@@ -25,6 +26,33 @@ import type {
 let keyStore: KeyStore | null = null;
 let gateway: ModelGateway | null = null;
 let grounder: GroundingService | null = null;
+let embedder: ChildProcessEmbedder | null = null;
+
+/** 384-dim all-MiniLM-L6-v2. */
+const EMBED_DIMENSION = 384;
+
+/**
+ * Build the embedder. The real model runs in a STOCK-NODE child process (via
+ * tsx), NOT the Electron main process — onnxruntime-node is a native addon that
+ * SIGTRAPs the main process. Disposes any prior child first (vault switch).
+ *
+ * NOTE (D17 / eventual packaged-build fix): this spawns the .ts worker via tsx,
+ * which only exists in dev. A packaged build can't rely on tsx or src/ — it must
+ * bundle the model + onnxruntime and fork compiled JS (or use a utilityProcess).
+ */
+function makeEmbedder(): ChildProcessEmbedder {
+  embedder?.dispose();
+  // __dirname is <root>/dist/main at runtime.
+  const root = path.join(__dirname, "..", "..");
+  const tsx = path.join(root, "node_modules", ".bin", "tsx");
+  const child = path.join(root, "src", "grounding", "embedderChild.ts");
+  embedder = new ChildProcessEmbedder({
+    command: tsx,
+    args: [child],
+    dimension: EMBED_DIMENSION,
+  });
+  return embedder;
+}
 
 /**
  * Sink that persists a parsed proposal into the proposal store and returns the
@@ -60,8 +88,9 @@ export async function initAi(opts: {
       fetchImpl: (url, init) => fetch(url, init),
       logger,
     });
-    // The embedder is cheap to construct; the model only loads on first index.
-    grounder = new GroundingService(new TransformersEmbedder());
+    // The child embedder is cheap to construct; the model only loads in the
+    // child on first index.
+    grounder = new GroundingService(makeEmbedder());
   } catch {
     keyStore = null;
     gateway = null;
@@ -208,7 +237,7 @@ export function aiGroundingStatus(): GroundingStatus {
  */
 export function resetGrounding(): void {
   try {
-    grounder = new GroundingService(new TransformersEmbedder());
+    grounder = new GroundingService(makeEmbedder());
   } catch {
     grounder = null;
   }
