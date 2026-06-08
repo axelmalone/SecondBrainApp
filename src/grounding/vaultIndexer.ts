@@ -3,7 +3,12 @@ import * as path from "node:path";
 import { chunkMarkdown } from "./chunk.js";
 import { retrieve, type RetrieveOptions } from "./retrieve.js";
 import { VectorIndex } from "./vectorIndex.js";
-import type { Embedder, GroundingResult, IndexedChunk } from "./types.js";
+import type {
+  Chunk,
+  Embedder,
+  GroundingResult,
+  IndexedChunk,
+} from "./types.js";
 
 const MARKDOWN_EXT = new Set([".md", ".markdown"]);
 
@@ -46,22 +51,38 @@ export interface IndexCounts {
  * loads on demand. A failed file read is skipped, never fatal.
  */
 export class GroundingService {
+  /** How many chunks to embed per round-trip to the embedder. Larger batches
+   *  keep the (single-threaded) model saturated instead of stop-starting once
+   *  per note, which is the bulk of the indexing speed-up. */
+  private static readonly EMBED_BATCH = 32;
+
   private readonly index = new VectorIndex();
   /** Distinct note paths currently in the index (so counts survive replaceNote). */
   private readonly notePaths = new Set<string>();
   private indexing = false;
+  /** Live indexing progress in chunks (done/total), for the UI status line. */
+  private progress = { done: 0, total: 0 };
 
   constructor(
     private readonly embedder: Embedder,
     private readonly options: GroundingServiceOptions = {}
   ) {}
 
-  status(): { ready: boolean; indexing: boolean; notes: number; chunks: number } {
+  status(): {
+    ready: boolean;
+    indexing: boolean;
+    notes: number;
+    chunks: number;
+    processed: number;
+    total: number;
+  } {
     return {
       ready: this.index.size > 0,
       indexing: this.indexing,
       notes: this.notePaths.size,
       chunks: this.index.size,
+      processed: this.progress.done,
+      total: this.progress.total,
     };
   }
 
@@ -78,13 +99,26 @@ export class GroundingService {
     return chunks.map((c, i) => ({ ...c, vector: vectors[i] as number[] }));
   }
 
-  /** Full re-index of the vault at `root`. Replaces the entire index. */
+  /**
+   * Full re-index of the vault at `root`. Replaces the entire index.
+   *
+   * Chunks every note up front (cheap, no model), then embeds ALL chunks in
+   * batches — far fewer round-trips than one embed call per note, which keeps
+   * the model busy instead of idling between notes. `status().processed/total`
+   * advances as batches complete so the UI can show live progress. The index is
+   * populated only after every embed succeeds, so a mid-run embedder failure
+   * leaves no half-built index (the call throws and the caller reports it).
+   */
   async indexVault(root: string): Promise<IndexCounts> {
     this.indexing = true;
+    this.progress = { done: 0, total: 0 };
     try {
       this.index.clear();
       this.notePaths.clear();
       const files = await listMarkdown(root);
+
+      // 1. Chunk every readable note (no embedding yet).
+      const perNote: { file: string; chunks: Chunk[] }[] = [];
       for (const file of files) {
         let md: string;
         try {
@@ -92,10 +126,32 @@ export class GroundingService {
         } catch {
           continue;
         }
-        const indexed = await this.embedChunks(file, md);
-        if (indexed.length === 0) continue;
+        const chunks = chunkMarkdown(file, md, this.chunkOptions());
+        if (chunks.length > 0) perNote.push({ file, chunks });
+      }
+
+      // 2. Embed the flattened chunk list in batches, advancing progress.
+      const flat = perNote.flatMap((n) => n.chunks);
+      this.progress.total = flat.length;
+      const vectors = new Array<number[]>(flat.length);
+      for (let i = 0; i < flat.length; i += GroundingService.EMBED_BATCH) {
+        const slice = flat.slice(i, i + GroundingService.EMBED_BATCH);
+        const batch = await this.embedder.embed(slice.map((c) => c.text));
+        for (let j = 0; j < slice.length; j++) {
+          vectors[i + j] = batch[j] as number[];
+        }
+        this.progress.done = Math.min(i + slice.length, flat.length);
+      }
+
+      // 3. Reattach vectors to their notes and populate the index.
+      let k = 0;
+      for (const n of perNote) {
+        const indexed: IndexedChunk[] = n.chunks.map((c) => ({
+          ...c,
+          vector: vectors[k++] as number[],
+        }));
         this.index.add(indexed);
-        this.notePaths.add(file);
+        this.notePaths.add(n.file);
       }
       return { notes: this.notePaths.size, chunks: this.index.size };
     } finally {

@@ -1275,7 +1275,21 @@ indexBtn.addEventListener("click", async () => {
   groundDot.classList.remove("on");
   groundState.textContent = "Indexing your vault… (first run downloads the local model)";
   indexBtn.hidden = true;
+
+  // Poll for live progress while the (single round-trip) index call runs, so the
+  // status line shows "Indexing… 43% (620/1450)" instead of a silent spinner.
+  const poll = window.setInterval(() => {
+    void window.secondBrain.aiGroundingStatus().then((s) => {
+      if (s.indexing && s.total > 0) {
+        const pct = Math.round((100 * s.processed) / s.total);
+        groundState.textContent = `Indexing your vault… ${pct}% (${s.processed}/${s.total})`;
+        groundState.title = groundState.textContent;
+      }
+    });
+  }, 400);
+
   const res = await window.secondBrain.aiIndexVault();
+  window.clearInterval(poll);
   indexBtn.disabled = false;
   if (res.ok) {
     setStatus(`Indexed ${res.notes} notes (${res.chunks} chunks).`);

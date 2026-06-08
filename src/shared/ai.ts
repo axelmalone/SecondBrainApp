@@ -144,6 +144,9 @@ export interface GroundingStatus {
   indexing: boolean;
   notes: number;
   chunks: number;
+  /** Live progress during a re-index: chunks embedded so far / total to embed. */
+  processed: number;
+  total: number;
 }
 
 export type AiIndexResult =
