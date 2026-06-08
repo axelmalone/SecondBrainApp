@@ -80,16 +80,23 @@ function lastUserMessage(messages: ChatMessage[]): string | undefined {
   return undefined;
 }
 
-function dedupeSources(
+/**
+ * Map the retrieved chunks to grounding sources IN ORDER, one per excerpt.
+ * Order matters: excerpt N in the injected context (see buildContext) is
+ * numbered [N], so `sources[N-1]` is the note the model means when it writes
+ * "[N]". The renderer relies on this alignment to thread an inline citation to
+ * the right sidenote. Duplicates (two chunks from the same note) are kept —
+ * they're distinct excerpts and may be cited separately; the UI dedupes for the
+ * summary count.
+ */
+function orderedSources(
   chunks: { notePath: string; heading?: string }[]
 ): GroundingMeta {
-  const seen = new Set<string>();
-  const sources: { notePath: string; heading?: string }[] = [];
-  for (const c of chunks) {
-    if (seen.has(c.notePath)) continue;
-    seen.add(c.notePath);
-    sources.push(c.heading !== undefined ? { notePath: c.notePath, heading: c.heading } : { notePath: c.notePath });
-  }
+  const sources = chunks.map((c) =>
+    c.heading !== undefined
+      ? { notePath: c.notePath, heading: c.heading }
+      : { notePath: c.notePath }
+  );
   return { grounded: true, sources };
 }
 
@@ -125,7 +132,7 @@ async function applyGrounding(
       { role: "system", content: result.injected },
       ...req.messages,
     ];
-    return { messages, grounding: dedupeSources(result.chunks) };
+    return { messages, grounding: orderedSources(result.chunks) };
   }
   return {
     messages: req.messages,
