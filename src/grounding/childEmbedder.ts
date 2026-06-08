@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
+import * as os from "node:os";
 import type { Readable, Writable } from "node:stream";
 import type { Embedder } from "./types.js";
 
@@ -12,6 +13,13 @@ export interface ChildEmbedderSpec {
   args: string[];
   /** Embedding dimensionality (must match the model). */
   dimension: number;
+  /** OS nice value for the worker (0..19; higher = lower priority). Keeps a busy
+   *  index from making the machine feel laggy — it yields to foreground work.
+   *  Default 10. 0 disables. */
+  niceness?: number;
+  /** Kill the (memory-heavy ~400MB) child after this many ms idle; it respawns
+   *  lazily on next embed. 0 disables. Default 30s. */
+  idleMs?: number;
 }
 
 interface Pending {
@@ -33,25 +41,31 @@ interface Pending {
 export class ChildProcessEmbedder implements Embedder {
   readonly dimension: number;
   private readonly spec: ChildEmbedderSpec;
+  private readonly niceness: number;
+  private readonly idleMs: number;
   private child: Worker | null = null;
   private ready: Promise<void> | null = null;
   private readonly pending = new Map<number, Pending>();
   private nextId = 0;
   private stdoutBuffer = "";
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(spec: ChildEmbedderSpec) {
     this.spec = spec;
     this.dimension = spec.dimension;
+    this.niceness = spec.niceness ?? 10;
+    this.idleMs = spec.idleMs ?? 30_000;
   }
 
   async embed(texts: string[]): Promise<number[][]> {
     if (texts.length === 0) return [];
+    this.clearIdle(); // a request is starting; don't reap the child under us
     await this.ensureChild();
     const child = this.child;
     if (!child) throw new Error("embedder child is not running");
 
     const id = this.nextId++;
-    return new Promise<number[][]>((resolve, reject) => {
+    const result = new Promise<number[][]>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       child.stdin.write(JSON.stringify({ id, texts }) + "\n", (err) => {
         if (err) {
@@ -60,14 +74,46 @@ export class ChildProcessEmbedder implements Embedder {
         }
       });
     });
+    try {
+      return await result;
+    } finally {
+      this.armIdle(); // idle again → eligible for reaping after idleMs
+    }
   }
 
   /** Stop the child (e.g. on vault switch). Safe to call when not running. */
   dispose(): void {
+    this.clearIdle();
     this.rejectAll(new Error("embedder disposed"));
     this.child?.kill();
     this.child = null;
     this.ready = null;
+  }
+
+  private clearIdle(): void {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+  }
+
+  /** Reap the child after idleMs of no work (respawns lazily on next embed).
+   *  unref'd so the timer never keeps the process alive on its own. */
+  private armIdle(): void {
+    if (this.idleMs <= 0) return;
+    this.clearIdle();
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = null;
+      if (this.pending.size > 0) {
+        this.armIdle();
+        return;
+      }
+      this.child?.kill();
+      this.child = null;
+      this.ready = null;
+      this.stdoutBuffer = "";
+    }, this.idleMs);
+    this.idleTimer.unref?.();
   }
 
   private ensureChild(): Promise<void> {
@@ -84,6 +130,16 @@ export class ChildProcessEmbedder implements Embedder {
         return;
       }
       this.child = child;
+
+      // Run the (CPU-heavy) model at low OS priority so a busy index yields to
+      // the user's foreground work and never makes the machine feel laggy.
+      if (typeof child.pid === "number" && this.niceness > 0) {
+        try {
+          os.setPriority(child.pid, this.niceness);
+        } catch {
+          /* best effort — not fatal if the platform refuses */
+        }
+      }
 
       child.stdout.setEncoding("utf8");
       child.stdout.on("data", (chunk: string) => this.onStdout(chunk, resolve));

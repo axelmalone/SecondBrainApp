@@ -1282,7 +1282,10 @@ indexBtn.addEventListener("click", async () => {
     void window.secondBrain.aiGroundingStatus().then((s) => {
       if (s.indexing && s.total > 0) {
         const pct = Math.round((100 * s.processed) / s.total);
-        groundState.textContent = `Indexing your vault… ${pct}% (${s.processed}/${s.total})`;
+        // "sections" not a bare number — chunks are pieces of notes (~many per
+        // note), so an unlabeled count reads as a phantom note count.
+        const notes = s.notesTotal > 0 ? ` across ${s.notesTotal} notes` : "";
+        groundState.textContent = `Indexing… ${pct}% · ${s.processed}/${s.total} sections${notes}`;
         groundState.title = groundState.textContent;
       }
     });
