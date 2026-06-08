@@ -15,6 +15,7 @@ import type {
 import type { ChatSession, ChatSummary, StoredMessage } from "./chat.js";
 import type { AcceptanceStats, ApplyResult, StoredProposal } from "./proposal.js";
 import type { RenderNode } from "./render.js";
+import type { Backlink, SearchHit } from "./search.js";
 
 export type {
   AiIndexResult,
@@ -28,6 +29,7 @@ export type {
 export type { ChatSession, ChatSummary, StoredMessage } from "./chat.js";
 export type { AcceptanceStats, ApplyResult, StoredProposal } from "./proposal.js";
 export type { RenderNode, RenderTag } from "./render.js";
+export type { Backlink, SearchHit } from "./search.js";
 
 export type ConflictResolution = "keep-mine" | "take-theirs" | "keep-both";
 
@@ -87,6 +89,10 @@ export interface SecondBrainAPI {
   openWikilink(target: string): Promise<OpenResult | null>;
   /** Open an external (http/https/mailto) link in the system browser. */
   openExternal(url: string): Promise<void>;
+  /** Full-text search across the vault (works even when grounding is off). */
+  search(query: string): Promise<SearchHit[]>;
+  /** Notes that link to the given note (backlinks panel). */
+  backlinks(path: string): Promise<Backlink[]>;
 
   /** Current key-store state + which providers have a key configured. */
   aiStatus(): Promise<AiStatus>;

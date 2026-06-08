@@ -21,6 +21,8 @@ import { ProposalStore } from "./proposalStore.js";
 import { ProposalSession } from "./proposalSession.js";
 import { renderMarkdown } from "./markdownRender.js";
 import { listMarkdownFiles, noteName } from "./vaultScan.js";
+import { LinkIndex } from "./linkIndex.js";
+import { SearchIndex } from "./searchIndex.js";
 import {
   chatAppend,
   chatCreate,
@@ -43,13 +45,19 @@ let vaultConfigPath = "";
 let vaultRoot: string | null = null;
 let watcher: VaultWatcher | null = null;
 let proposals: ProposalSession | null = null;
+const linkIndex = new LinkIndex();
+const searchIndex = new SearchIndex();
 
 /** Shared post-write side effects: suppress the watcher's own-write event and
- *  re-index the note. Used by both the editor save path and proposal apply. */
+ *  re-index the note across grounding + the lightweight link/search indexes.
+ *  Used by both the editor save path and proposal apply (the watcher event for
+ *  our own write is suppressed, so we must update the indexes directly). */
 function afterWrite(paths: string[]): void {
   for (const p of paths) {
     watcher?.markSelfWrite(p);
     void reindexNote(p);
+    void linkIndex.reindexNote(p);
+    void searchIndex.reindexNote(p);
   }
 }
 
@@ -115,13 +123,26 @@ function startWatcher(root: string): void {
     root,
     onChanged: (p) => {
       void reindexNote(p);
+      void linkIndex.reindexNote(p);
+      void searchIndex.reindexNote(p);
       // Proactive staleness (4C): a note changing on disk may stale a pending
       // proposal that targets it. Self-writes are already suppressed above.
       void proposals?.onVaultDirty(p);
     },
-    onRemoved: (p) => removeNoteFromIndex(p),
+    onRemoved: (p) => {
+      removeNoteFromIndex(p);
+      linkIndex.removeNote(p);
+      searchIndex.removeNote(p);
+    },
   });
   watcher.start();
+}
+
+/** Rebuild the lightweight link + search indexes for the active vault. Cheap
+ *  (text only); runs on launch and on every vault switch. Never throws. */
+function rebuildIndexes(root: string): void {
+  void linkIndex.build(root).catch(() => {});
+  void searchIndex.build(root).catch(() => {});
 }
 
 /**
@@ -133,6 +154,7 @@ async function setVaultRoot(root: string): Promise<void> {
   vaultRoot = root;
   await persistVaultRoot();
   startWatcher(root);
+  rebuildIndexes(root);
   resetGrounding();
 }
 
@@ -214,6 +236,12 @@ function registerIpc(): void {
   ipcMain.handle("link:openExternal", (_e, url: string) => {
     if (/^(https?:|mailto:)/i.test(url)) void shell.openExternal(url);
   });
+
+  // Glass-box search + backlinks (6A) — decoupled from grounding.
+  ipcMain.handle("vault:search", (_e, query: string) => searchIndex.search(query));
+  ipcMain.handle("vault:backlinks", (_e, p: string) =>
+    vaultRoot && isInside(vaultRoot, p) ? linkIndex.backlinksFor(p) : []
+  );
 
   ipcMain.handle(
     "vault:resolve",
@@ -310,7 +338,10 @@ app.whenReady().then(async () => {
 
   // Incremental re-index (D2 + D6): external edits flow through the watcher;
   // the app's own saves re-index directly and suppress the duplicate event.
-  if (vaultRoot) startWatcher(vaultRoot);
+  if (vaultRoot) {
+    startWatcher(vaultRoot);
+    rebuildIndexes(vaultRoot);
+  }
   setOnSaved(afterWrite);
 
   registerIpc();

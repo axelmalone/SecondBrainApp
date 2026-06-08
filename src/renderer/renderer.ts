@@ -285,6 +285,7 @@ function loadIntoEditor(path: string, text: string): void {
   // (the glass box). Editing is one click away to correct the AI's brain.
   viewToggle.hidden = false;
   void setViewMode("read");
+  void refreshBacklinks();
 }
 
 function scheduleSave(): void {
@@ -433,6 +434,80 @@ async function openWikilinkTarget(target: string): Promise<void> {
   } else {
     setStatus(`"${target}" doesn't exist yet.`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Glass-box search + backlinks (6A). Both read from lightweight main-process
+// indexes that are SEPARATE from grounding, so they work the instant the app
+// opens — no embedding model, no "index your vault" step. Search input is
+// debounced (~150ms) so a large vault never janks typing.
+// ---------------------------------------------------------------------------
+
+const searchInput = $<HTMLInputElement>("search-input");
+const searchResults = $<HTMLDivElement>("search-results");
+const backlinksPanel = $<HTMLElement>("backlinks");
+const backlinksList = $<HTMLDivElement>("backlinks-list");
+const SEARCH_DEBOUNCE_MS = 150;
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
+
+searchInput.addEventListener("input", () => {
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => void runSearch(searchInput.value), SEARCH_DEBOUNCE_MS);
+});
+
+async function runSearch(raw: string): Promise<void> {
+  const query = raw.trim();
+  if (query.length === 0) {
+    searchResults.replaceChildren();
+    searchResults.hidden = true;
+    fileTreeEl.hidden = false;
+    return;
+  }
+  const hits = await window.secondBrain.search(query);
+  searchResults.replaceChildren();
+  if (hits.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "search-empty";
+    empty.textContent = "No matches.";
+    searchResults.appendChild(empty);
+  } else {
+    for (const hit of hits) {
+      const item = document.createElement("div");
+      item.className = "search-hit";
+      const name = document.createElement("div");
+      name.className = "hit-name";
+      name.textContent = hit.name;
+      const snippet = document.createElement("div");
+      snippet.className = "hit-snippet";
+      snippet.textContent = hit.snippet;
+      item.append(name, snippet);
+      item.addEventListener("click", () => void openNoteByPath(hit.path));
+      searchResults.appendChild(item);
+    }
+  }
+  fileTreeEl.hidden = true;
+  searchResults.hidden = false;
+}
+
+async function refreshBacklinks(): Promise<void> {
+  if (!currentPath) {
+    backlinksPanel.hidden = true;
+    return;
+  }
+  const links = await window.secondBrain.backlinks(currentPath);
+  backlinksList.replaceChildren();
+  if (links.length === 0) {
+    backlinksPanel.hidden = true;
+    return;
+  }
+  for (const link of links) {
+    const row = document.createElement("div");
+    row.className = "backlink";
+    row.textContent = link.name;
+    row.addEventListener("click", () => void openNoteByPath(link.path));
+    backlinksList.appendChild(row);
+  }
+  backlinksPanel.hidden = false;
 }
 
 async function resolveWith(resolution: ConflictResolution): Promise<void> {

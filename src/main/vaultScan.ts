@@ -35,3 +35,25 @@ export async function listMarkdownFiles(root: string): Promise<string[]> {
 export function noteName(absPath: string): string {
   return path.basename(absPath, path.extname(absPath));
 }
+
+const WIKILINK_RE = /\[\[([^\][]+)\]\]/g;
+
+/**
+ * Extract the (lowercased) target NAMES of every [[wikilink]] in a note's text,
+ * stripping any |alias and #heading. Shared by the LinkIndex (backlinks) and the
+ * wikilink resolver. Brackets with a nested "[" are skipped by the character
+ * class, matching the renderer's parser.
+ */
+export function extractWikilinkTargets(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(WIKILINK_RE)) {
+    let inner = m[1] ?? "";
+    const pipe = inner.indexOf("|");
+    if (pipe >= 0) inner = inner.slice(0, pipe);
+    const hash = inner.indexOf("#");
+    if (hash >= 0) inner = inner.slice(0, hash);
+    const name = inner.trim().toLowerCase();
+    if (name) out.push(name);
+  }
+  return out;
+}
