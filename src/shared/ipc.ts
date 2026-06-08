@@ -13,6 +13,10 @@ import type {
   ProviderId,
 } from "./ai.js";
 import type { ChatSession, ChatSummary, StoredMessage } from "./chat.js";
+import type { AcceptanceStats, ApplyResult, StoredProposal } from "./proposal.js";
+import type { RenderNode } from "./render.js";
+import type { Backlink, SearchHit } from "./search.js";
+import type { DiffBlock } from "./diff.js";
 
 export type {
   AiIndexResult,
@@ -24,6 +28,10 @@ export type {
   GroundingStatus,
 } from "./ai.js";
 export type { ChatSession, ChatSummary, StoredMessage } from "./chat.js";
+export type { AcceptanceStats, ApplyResult, StoredProposal } from "./proposal.js";
+export type { RenderNode, RenderTag } from "./render.js";
+export type { Backlink, SearchHit } from "./search.js";
+export type { DiffBlock } from "./diff.js";
 
 export type ConflictResolution = "keep-mine" | "take-theirs" | "keep-both";
 
@@ -77,6 +85,16 @@ export interface SecondBrainAPI {
   save(path: string, text: string): Promise<SaveResult>;
   /** Resolve a pending conflict for an open note. */
   resolve(path: string, resolution: ConflictResolution): Promise<ResolveResult>;
+  /** Render markdown to the safe render-AST for the glass-box read view (5A). */
+  renderMarkdown(source: string): Promise<RenderNode[]>;
+  /** Open a wikilink's target note by name/path. null if it doesn't exist. */
+  openWikilink(target: string): Promise<OpenResult | null>;
+  /** Open an external (http/https/mailto) link in the system browser. */
+  openExternal(url: string): Promise<void>;
+  /** Full-text search across the vault (works even when grounding is off). */
+  search(query: string): Promise<SearchHit[]>;
+  /** Notes that link to the given note (backlinks panel). */
+  backlinks(path: string): Promise<Backlink[]>;
 
   /** Current key-store state + which providers have a key configured. */
   aiStatus(): Promise<AiStatus>;
@@ -88,6 +106,22 @@ export interface SecondBrainAPI {
   aiGroundingStatus(): Promise<GroundingStatus>;
   /** Re-index the vault for grounding. Triggers the local embedding model. */
   aiIndexVault(): Promise<AiIndexResult>;
+
+  // ---- Write-back review queue (the proposal loop) ----
+  /** Every proposal, folded, newest-updated first. */
+  proposalList(): Promise<StoredProposal[]>;
+  /** The multi-hunk diff to render for review (against the reviewed base). */
+  proposalDiff(id: string): Promise<DiffBlock[]>;
+  /** Apply (approve) a proposal; pass selected hunk ids for partial approval. */
+  proposalApprove(id: string, selectedHunkIds?: number[]): Promise<ApplyResult>;
+  /** Reject a proposal (records the decision; nothing is written). */
+  proposalReject(id: string): Promise<void>;
+  /** Replace a proposal's content with the user's edited text (resets to pending). */
+  proposalEdit(id: string, content: string): Promise<StoredProposal | null>;
+  /** Explicit keep-both: write the proposal to a sibling, leave the target intact. */
+  proposalKeepBoth(id: string): Promise<ApplyResult>;
+  /** Acceptance-rate tally (proposed/approved/edited/rejected) — the gate signal. */
+  proposalStats(): Promise<AcceptanceStats>;
 
   /** Durable multi-chat store (D14), one append-only file per chat. */
   chatList(): Promise<ChatSummary[]>;

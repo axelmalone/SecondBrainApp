@@ -346,6 +346,257 @@
         border-radius: 10px;
       }
 
+      /* review queue (the write-back trust surface) */
+      .review-queue {
+        flex-shrink: 0;
+        max-height: 46%;
+        overflow-y: auto;
+        margin: 0 14px 8px;
+        border: 1px solid var(--accent);
+        border-radius: 12px;
+        background: color-mix(in srgb, var(--accent) 5%, var(--paper, #fff));
+      }
+      .rq-head {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        padding: 9px 14px;
+        position: sticky;
+        top: 0;
+        background: inherit;
+        border-bottom: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
+      }
+      .rq-title {
+        font-family: var(--font-display, var(--font));
+        font-size: 13px;
+        color: var(--accent);
+      }
+      .rq-stats {
+        flex: 1;
+        text-align: right;
+        font-size: 10.5px;
+        color: var(--text-3);
+      }
+      .rq-list { padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+      .rq-card {
+        border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+        border-radius: 10px;
+        background: var(--paper, #fff);
+        padding: 10px 12px;
+      }
+      .rq-card.stale { border-color: var(--amber); }
+      .rq-kind {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        margin-bottom: 4px;
+      }
+      .rq-badge {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        padding: 1px 6px;
+        border-radius: 5px;
+        background: color-mix(in srgb, var(--accent) 14%, transparent);
+        color: var(--accent);
+      }
+      .rq-badge.stale { background: color-mix(in srgb, var(--amber) 18%, transparent); color: var(--amber); }
+      .rq-badge.edited { background: var(--surface-2, rgba(0,0,0,0.06)); color: var(--text-2); }
+      .rq-path { color: var(--text-2); font-family: var(--font-mono, monospace); font-size: 11px; }
+      .rq-reason { font-size: 12px; color: var(--text-2); margin: 2px 0 6px; }
+      .rq-diff {
+        font-family: var(--font-mono, monospace);
+        font-size: 11.5px;
+        line-height: 1.5;
+        border-radius: 7px;
+        overflow: hidden;
+        border: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+        margin-bottom: 8px;
+      }
+      .rq-hunk { display: flex; }
+      .rq-hunk-toggle {
+        flex-shrink: 0;
+        padding: 2px 6px;
+        background: var(--surface-2, rgba(0, 0, 0, 0.04));
+        border-right: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+        display: flex;
+        align-items: flex-start;
+      }
+      .rq-hunk-lines { flex: 1; min-width: 0; }
+      .rq-line { white-space: pre-wrap; word-break: break-word; padding: 0 8px; }
+      .rq-line.ctx { color: var(--text-3); }
+      .rq-line.add { background: color-mix(in srgb, var(--green) 13%, transparent); color: var(--text); }
+      .rq-line.del { background: color-mix(in srgb, var(--red) 11%, transparent); color: var(--text-2); }
+      .rq-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+      .rq-actions button {
+        font-size: 11.5px;
+        padding: 4px 10px;
+        border-radius: 6px;
+        border: 1px solid var(--border, rgba(0, 0, 0, 0.14));
+        background: var(--paper, #fff);
+        color: var(--text);
+        cursor: pointer;
+      }
+      .rq-actions button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+      .rq-actions button.danger { color: var(--red); }
+      .rq-edit-area {
+        width: 100%;
+        box-sizing: border-box;
+        font-family: var(--font-mono, monospace);
+        font-size: 11.5px;
+        min-height: 90px;
+        margin-bottom: 8px;
+        border-radius: 7px;
+        border: 1px solid var(--border, rgba(0, 0, 0, 0.14));
+        padding: 8px;
+        resize: vertical;
+      }
+
+      /* sidebar search */
+      .search-input {
+        margin: 8px 14px 4px;
+        padding: 6px 10px;
+        border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+        border-radius: 7px;
+        background: var(--surface-2, rgba(0, 0, 0, 0.03));
+        color: var(--text);
+        font-family: var(--font);
+        font-size: 12.5px;
+      }
+      .search-input:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: -1px;
+      }
+      .search-results {
+        overflow-y: auto;
+        padding: 4px 8px 12px;
+      }
+      .search-hit {
+        padding: 7px 10px;
+        border-radius: 7px;
+        cursor: pointer;
+      }
+      .search-hit:hover {
+        background: var(--surface-2, rgba(0, 0, 0, 0.05));
+      }
+      .search-hit .hit-name {
+        font-size: 12.5px;
+        color: var(--text);
+      }
+      .search-hit .hit-snippet {
+        font-size: 11px;
+        color: var(--text-3);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .search-empty {
+        padding: 10px 14px;
+        font-size: 11.5px;
+        color: var(--text-3);
+      }
+
+      /* backlinks panel */
+      .backlinks {
+        flex-shrink: 0;
+        max-height: 28%;
+        overflow-y: auto;
+        border-top: 1px solid var(--border, rgba(0, 0, 0, 0.1));
+        padding: 10px 22px 14px;
+      }
+      .backlinks-head {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--text-3);
+        margin-bottom: 6px;
+      }
+      .backlink {
+        font-size: 12.5px;
+        color: var(--accent);
+        cursor: pointer;
+        padding: 2px 0;
+      }
+      .backlink:hover {
+        text-decoration: underline;
+      }
+
+      /* Read/Edit toggle */
+      .view-toggle {
+        display: inline-flex;
+        flex-shrink: 0;
+        gap: 2px;
+        padding: 2px;
+        background: var(--surface-2, rgba(0, 0, 0, 0.05));
+        border-radius: 7px;
+      }
+      .view-toggle button {
+        border: none;
+        background: transparent;
+        color: var(--text-3);
+        font-size: 11.5px;
+        padding: 3px 10px;
+        border-radius: 5px;
+        cursor: pointer;
+      }
+      .view-toggle button.on {
+        background: var(--paper, #fff);
+        color: var(--text);
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+      }
+
+      /* Rendered read view (glass box) */
+      .read-view {
+        flex: 1;
+        overflow-y: auto;
+        padding: 12px 24px 24px;
+        font-family: var(--font);
+        font-size: 15px;
+        line-height: 1.7;
+        color: var(--text);
+      }
+      .read-view h1,
+      .read-view h2,
+      .read-view h3 {
+        font-family: var(--font-display, var(--font));
+        line-height: 1.25;
+        margin: 1.1em 0 0.4em;
+      }
+      .read-view h1 { font-size: 1.7em; }
+      .read-view h2 { font-size: 1.35em; }
+      .read-view h3 { font-size: 1.15em; }
+      .read-view p { margin: 0.6em 0; }
+      .read-view ul,
+      .read-view ol { margin: 0.5em 0; padding-left: 1.4em; }
+      .read-view li { margin: 0.15em 0; }
+      .read-view blockquote {
+        margin: 0.7em 0;
+        padding: 0.1em 0 0.1em 0.9em;
+        border-left: 3px solid var(--accent);
+        color: var(--text-2);
+      }
+      .read-view pre {
+        background: var(--surface-2, rgba(0, 0, 0, 0.05));
+        padding: 12px 14px;
+        border-radius: 8px;
+        overflow-x: auto;
+      }
+      .read-view code {
+        font-family: var(--font-mono, monospace);
+        font-size: 0.9em;
+      }
+      .read-view pre code { font-size: 0.86em; }
+      .read-view a { color: var(--accent); cursor: pointer; }
+      .read-view a.wikilink {
+        text-decoration: none;
+        border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+      }
+      .read-view a.wikilink.unresolved {
+        color: var(--text-3);
+        border-bottom: 1px dashed var(--text-3);
+      }
+
       /* conflict panel (inside editor card) */
       #conflict {
         display: none;
@@ -954,13 +1205,25 @@
             <button id="create-vault">Create vault…</button>
           </div>
         </div>
+        <input
+          id="search-input"
+          class="search-input"
+          type="search"
+          placeholder="Search notes…"
+          spellcheck="false"
+        />
         <div class="tree" id="file-tree"></div>
+        <div class="search-results" id="search-results" hidden></div>
       </section>
 
       <!-- editor card -->
       <section class="card">
         <div class="ed-head">
           <span class="ed-meta" id="path">No note open</span>
+          <div class="view-toggle" id="view-toggle" hidden>
+            <button data-view="read" class="on" id="view-read">Read</button>
+            <button data-view="edit" id="view-edit">Edit</button>
+          </div>
           <span class="save-state" id="save-state"></span>
         </div>
         <textarea
@@ -970,6 +1233,11 @@
           placeholder="Select a note from your vault to start editing."
           disabled
         ></textarea>
+        <div class="read-view" id="read-view" hidden></div>
+        <section class="backlinks" id="backlinks" hidden>
+          <div class="backlinks-head" id="backlinks-head">Linked mentions</div>
+          <div class="backlinks-list" id="backlinks-list"></div>
+        </section>
         <section id="conflict">
           <strong>This note changed on disk (e.g. Obsidian saved it).</strong>
           <span>Your unsaved edits and the on-disk version differ. Choose:</span>
@@ -1021,6 +1289,14 @@
         </div>
 
         <div id="messages"></div>
+
+        <section class="review-queue" id="review-queue" hidden>
+          <div class="rq-head">
+            <span class="rq-title">Review queue</span>
+            <span class="rq-stats" id="rq-stats"></span>
+          </div>
+          <div class="rq-list" id="rq-list"></div>
+        </section>
 
         <div class="composer">
           <textarea
