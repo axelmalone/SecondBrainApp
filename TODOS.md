@@ -238,3 +238,9 @@
 - **FINDING-005 — native `<select>` model picker:** off the custom-pill aesthetic of the
   adjacent segmented control. A custom listbox is a larger change for marginal gain. Polish.
 - (Fixed same session: composer placeholder clip 001, editor focus ring 002, button font 003.)
+
+### Deferred QA finding (from /qa 2026-06-08)
+- **QA-001 — default model is Sonnet 4.5, not 4.6:** `MODELS.anthropic` lists 4.5 first
+  (renderer.ts:369) so it auto-selects as default; 4.6 is one entry down. OpenAI list
+  (gpt-4o/o1) is also a generation behind. Product decision (which model new users land on),
+  not a bug — reorder the array if you want 4.6 as default. Low.
