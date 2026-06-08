@@ -7,6 +7,7 @@ export {
   type ResolveResult,
 } from "./reconcile.js";
 export { atomicWrite, type AtomicWriteOptions } from "./atomicWrite.js";
+export { guardedApply, type GuardedApplyResult } from "./guardedApply.js";
 export { hydrate, serialize, spliceText, setText } from "./automerge.js";
 export { sha256, baselineFrom, readWithBaseline, sameContent } from "./hash.js";
 export * from "./errors.js";

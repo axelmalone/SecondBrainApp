@@ -1,13 +1,9 @@
 import {
   loadNote,
-  saveNote,
-  reconcile,
+  guardedApply,
   resolveConflict,
   setText,
   serialize,
-  ConflictError,
-  NoteDeletedError,
-  NoteRenamedError,
   type LoadedNote,
   type DiskBaseline,
 } from "../vault/index.js";
@@ -55,27 +51,31 @@ export async function saveText(
   const loaded = openNotes.get(path);
   if (!loaded) return { status: "error", message: "note is not open" };
 
-  // Fold the renderer's text into the live doc, then attempt the guarded write.
+  // Fold the renderer's text into the live doc, then attempt the guarded write
+  // through the shared text-level choke point. The Automerge doc is the editor's
+  // canonical buffer; guardedApply only ever sees the serialized markdown.
   loaded.doc = setText(loaded.doc, text);
   try {
-    await saveNote(loaded);
-    onSaved([path]);
-    return { status: "saved", text };
-  } catch (err) {
-    if (err instanceof NoteDeletedError) return { status: "deleted" };
-    if (err instanceof NoteRenamedError) return { status: "renamed" };
-    if (err instanceof ConflictError) {
-      // The write was refused because disk changed. Find out what happened so
-      // we can offer the user a choice — never silently clobber.
-      const r = await reconcile(loaded);
-      if (r.kind === "conflict") {
-        pendingConflicts.set(path, { disk: r.disk, diskText: r.diskText });
-        return { status: "conflict", diskText: r.diskText };
-      }
-      if (r.kind === "deleted") return { status: "deleted" };
-      if (r.kind === "renamed") return { status: "renamed" };
-      return { status: "error", message: "unexpected post-conflict state" };
+    const result = await guardedApply(path, loaded.baseline, serialize(loaded.doc));
+    switch (result.status) {
+      case "saved":
+        loaded.baseline = result.baseline;
+        onSaved([path]);
+        return { status: "saved", text };
+      case "conflict":
+        // The write was refused because disk changed — never silently clobber.
+        // Stash the disk side so resolve() can offer keep-mine/theirs/both.
+        pendingConflicts.set(path, {
+          disk: result.disk,
+          diskText: result.diskText,
+        });
+        return { status: "conflict", diskText: result.diskText };
+      case "deleted":
+        return { status: "deleted" };
+      case "renamed":
+        return { status: "renamed" };
     }
+  } catch (err) {
     return { status: "error", message: String(err) };
   }
 }
