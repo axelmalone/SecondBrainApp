@@ -229,4 +229,4 @@
   Effort M (human) / S (CC).
 
 ### Which game: indie vs venture
-- Make this explicit before raising or hiring. Founder decision, not a build task.
+- Make this explicit before raising or hiring. Founder decision, not a build task

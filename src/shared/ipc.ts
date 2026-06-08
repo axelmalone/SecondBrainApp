@@ -32,6 +32,20 @@ export interface OpenResult {
   text: string;
 }
 
+/** The active vault: absolute root + its display name. null when none chosen. */
+export interface VaultInfo {
+  root: string | null;
+  name: string | null;
+}
+
+/** One entry in the vault file tree. Dirs carry their (already-walked) children. */
+export interface FileNode {
+  name: string;
+  path: string;
+  type: "file" | "dir";
+  children?: FileNode[];
+}
+
 /** Outcome of a save attempt. Discriminated on `status`. */
 export type SaveResult =
   | { status: "saved"; text: string }
@@ -49,8 +63,16 @@ export type ResolveResult =
 
 /** The surface exposed to the renderer on `window.secondBrain`. */
 export interface SecondBrainAPI {
-  /** Open the native picker, load the chosen note. null if cancelled. */
-  open(): Promise<OpenResult | null>;
+  /** The active vault root + display name (null if none chosen yet). */
+  vaultInfo(): Promise<VaultInfo>;
+  /** Pick an EXISTING folder as the vault. null if cancelled. */
+  vaultChoose(): Promise<VaultInfo | null>;
+  /** Create a NEW vault folder and switch to it. null if cancelled. */
+  vaultCreate(): Promise<VaultInfo | null>;
+  /** The vault's markdown file tree (dirs + .md files, dot-dirs skipped). */
+  vaultFiles(): Promise<FileNode[]>;
+  /** Open a note by absolute path (from the tree). null if outside the vault. */
+  openPath(path: string): Promise<OpenResult | null>;
   /** Save edited text back to disk via the guarded atomic write. */
   save(path: string, text: string): Promise<SaveResult>;
   /** Resolve a pending conflict for an open note. */
@@ -72,5 +94,6 @@ export interface SecondBrainAPI {
   chatCreate(): Promise<ChatSummary>;
   chatLoad(id: string): Promise<ChatSession | null>;
   chatAppend(id: string, msg: StoredMessage): Promise<void>;
+  chatRename(id: string, title: string): Promise<void>;
   chatDelete(id: string): Promise<void>;
 }

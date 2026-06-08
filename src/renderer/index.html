@@ -10,8 +10,10 @@
     <style>
       /* ===========================================================
          "Cards" — softer, consumer, Apple-like. Grouped cards float
-         on a tinted canvas. Light/dark adaptive. Grounding is always
-         on; a calm status line + per-answer badges report honestly.
+         on a tinted canvas. Light/dark adaptive. Left: collapsible
+         vault file tree. Center: editor (autosaves). Right: chat.
+         Grounding is always on; a calm status line + per-answer
+         badges report honestly.
          =========================================================== */
       :root {
         color-scheme: light dark;
@@ -30,6 +32,7 @@
         --bubble: #f2f3f7;
         --green: #34c759;
         --amber: #ff9500;
+        --red: #ff3b30;
         --shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 8px 24px rgba(0, 0, 0, 0.05);
       }
       @media (prefers-color-scheme: dark) {
@@ -44,6 +47,7 @@
           --hover: rgba(255, 255, 255, 0.06);
           --sel: rgba(10, 132, 255, 0.2);
           --bubble: #2b2b2e;
+          --red: #ff453a;
           --shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 8px 28px rgba(0, 0, 0, 0.3);
         }
       }
@@ -67,8 +71,8 @@
         height: 50px;
         display: flex;
         align-items: center;
-        gap: 10px;
-        padding: 0 18px;
+        gap: 8px;
+        padding: 0 16px;
         flex-shrink: 0;
       }
       .bar .brand {
@@ -79,35 +83,36 @@
       .bar .spacer {
         flex: 1;
       }
-      .pill {
-        height: 30px;
-        padding: 0 14px;
-        border-radius: 999px;
+      .icon-btn {
         border: none;
-        background: var(--card);
-        color: var(--text);
-        font: inherit;
-        font-size: 13px;
+        background: transparent;
+        color: var(--text-2);
+        font-size: 16px;
+        line-height: 1;
         cursor: pointer;
-        box-shadow: var(--shadow);
+        padding: 6px 9px;
+        border-radius: 8px;
       }
-      .pill:disabled {
-        opacity: 0.45;
-        cursor: default;
-      }
-      .pill.primary {
-        background: var(--accent);
-        color: #fff;
+      .icon-btn:hover {
+        background: var(--hover);
+        color: var(--text);
       }
 
-      /* three-card grid */
+      /* three-card grid: vault tree | editor | chat */
       .grid {
         flex: 1;
         display: grid;
-        grid-template-columns: 220px 1fr 360px;
+        grid-template-columns: 240px 1fr 380px;
         gap: 16px;
         padding: 0 16px 14px;
         min-height: 0;
+      }
+      body.side-collapsed .grid {
+        grid-template-columns: 0 1fr 380px;
+        gap: 0 16px;
+      }
+      body.side-collapsed .sidebar {
+        display: none;
       }
       .card {
         background: var(--card);
@@ -136,57 +141,132 @@
         cursor: pointer;
       }
 
-      /* chats card */
-      .chats {
-        overflow-y: auto;
-        padding: 0 8px 10px;
+      /* vault sidebar */
+      .sidebar {
+        position: relative;
       }
-      .chat-item {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 9px 11px;
-        border-radius: 11px;
-        cursor: pointer;
-        margin-bottom: 3px;
+      .vault-head {
+        position: relative;
       }
-      .chat-item:hover {
-        background: var(--hover);
-      }
-      .chat-item.active {
-        background: var(--sel);
-      }
-      .chat-item .title {
+      .vault-name {
         flex: 1;
         min-width: 0;
-        font-size: 13px;
-        font-weight: 500;
+        overflow: hidden;
+        text-overflow: ellipsis;
         white-space: nowrap;
+        font-weight: 600;
+        color: var(--text);
+        font-size: 13px;
+      }
+      .vault-actions {
+        position: absolute;
+        top: 30px;
+        right: 8px;
+        z-index: 30;
+        background: var(--card);
+        border: 1px solid var(--hair);
+        border-radius: 10px;
+        box-shadow: var(--shadow);
+        padding: 4px;
+        display: flex;
+        flex-direction: column;
+        min-width: 150px;
+      }
+      .vault-actions[hidden] {
+        display: none;
+      }
+      .vault-actions button {
+        border: none;
+        background: transparent;
+        text-align: left;
+        font: inherit;
+        font-size: 12px;
+        padding: 8px 10px;
+        border-radius: 7px;
+        color: var(--text);
+        cursor: pointer;
+      }
+      .vault-actions button:hover {
+        background: var(--hover);
+      }
+      .tree {
+        flex: 1;
+        overflow: auto;
+        padding: 2px 8px 12px;
+      }
+      .tree-empty {
+        padding: 10px 12px;
+        color: var(--text-3);
+        font-size: 12px;
+      }
+      .tree-row {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 5px 6px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 13px;
+        white-space: nowrap;
+        overflow: hidden;
+      }
+      .tree-row:hover {
+        background: var(--hover);
+      }
+      .tree-row.file.active {
+        background: var(--sel);
+      }
+      .tree-row .caret {
+        width: 12px;
+        font-size: 9px;
+        color: var(--text-3);
+        flex-shrink: 0;
+        transition: transform 0.12s ease;
+      }
+      .tree-row .caret.open {
+        transform: rotate(90deg);
+      }
+      .tree-name {
         overflow: hidden;
         text-overflow: ellipsis;
       }
-      .chat-item .del {
-        border: none;
-        background: transparent;
-        color: var(--text-3);
-        opacity: 0;
-        padding: 0 2px;
-        font-size: 16px;
-        line-height: 1;
-        cursor: pointer;
-      }
-      .chat-item:hover .del {
-        opacity: 1;
+      .tree-row.dir .tree-name {
+        font-weight: 500;
       }
 
       /* editor card */
-      .ed-meta {
+      .ed-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
         padding: 16px 22px 0;
+      }
+      .ed-meta {
+        flex: 1;
+        min-width: 0;
         color: var(--text-3);
         font-size: 11.5px;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+      }
+      .save-state {
+        flex-shrink: 0;
+        font-size: 11.5px;
+        color: var(--text-3);
+      }
+      .save-state.saved {
+        color: var(--green);
+      }
+      .save-state.saving {
+        color: var(--text-2);
+      }
+      .save-state.dirty {
+        color: var(--amber);
+      }
+      .save-state.conflict,
+      .save-state.error {
+        color: var(--red);
       }
       .editor {
         flex: 1;
@@ -233,6 +313,108 @@
       }
 
       /* chat card */
+      .chat-head {
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--hair);
+      }
+      .chat-switch {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        border: none;
+        background: transparent;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text);
+        cursor: pointer;
+        padding: 5px 8px;
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .chat-switch:hover {
+        background: var(--hover);
+      }
+      .chat-switch #current-chat-title {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .chat-switch .chev {
+        color: var(--text-3);
+        font-size: 11px;
+        flex-shrink: 0;
+      }
+      .chat-list-pop {
+        position: absolute;
+        top: 48px;
+        left: 12px;
+        right: 12px;
+        z-index: 30;
+        max-height: 280px;
+        overflow: auto;
+        background: var(--card);
+        border: 1px solid var(--hair);
+        border-radius: 12px;
+        box-shadow: var(--shadow);
+        padding: 6px;
+      }
+      .chat-item {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 9px 11px;
+        border-radius: 11px;
+        cursor: pointer;
+        margin-bottom: 2px;
+      }
+      .chat-item:hover {
+        background: var(--hover);
+      }
+      .chat-item.active {
+        background: var(--sel);
+      }
+      .chat-item .title {
+        flex: 1;
+        min-width: 0;
+        font-size: 13px;
+        font-weight: 500;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .chat-item .rename-input {
+        flex: 1;
+        min-width: 0;
+        font: inherit;
+        font-size: 13px;
+        padding: 2px 6px;
+        border: 1px solid var(--accent);
+        border-radius: 6px;
+        background: var(--canvas);
+        color: var(--text);
+        outline: none;
+      }
+      .chat-item .del {
+        border: none;
+        background: transparent;
+        color: var(--text-3);
+        opacity: 0;
+        padding: 0 2px;
+        font-size: 16px;
+        line-height: 1;
+        cursor: pointer;
+      }
+      .chat-item:hover .del {
+        opacity: 1;
+      }
+
       .chat-top {
         padding: 12px 14px;
         display: flex;
@@ -519,6 +701,83 @@
         cursor: default;
       }
 
+      /* first-launch vault popup (dismissable) */
+      .modal-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 100;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.35);
+        backdrop-filter: blur(3px);
+      }
+      .modal-overlay[hidden] {
+        display: none;
+      }
+      .modal {
+        position: relative;
+        width: min(430px, 90vw);
+        background: var(--card);
+        border-radius: 18px;
+        box-shadow: var(--shadow);
+        padding: 30px 28px 24px;
+        text-align: center;
+      }
+      .modal-close {
+        position: absolute;
+        top: 12px;
+        right: 14px;
+        border: none;
+        background: transparent;
+        color: var(--text-3);
+        font-size: 20px;
+        line-height: 1;
+        cursor: pointer;
+      }
+      .modal-close:hover {
+        color: var(--text);
+      }
+      .modal-title {
+        margin: 4px 0 8px;
+        font-size: 18px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+      }
+      .modal-sub {
+        margin: 0 0 22px;
+        font-size: 13px;
+        color: var(--text-2);
+        line-height: 1.5;
+      }
+      .modal-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .modal-btn {
+        border: 1px solid var(--hair);
+        background: var(--card);
+        color: var(--text);
+        font: inherit;
+        font-size: 14px;
+        padding: 11px 16px;
+        border-radius: 11px;
+        cursor: pointer;
+      }
+      .modal-btn:hover {
+        background: var(--hover);
+      }
+      .modal-btn.primary {
+        background: var(--accent);
+        color: #fff;
+        border-color: transparent;
+      }
+      .modal-btn.primary:hover {
+        opacity: 0.92;
+        background: var(--accent);
+      }
+
       /* slim status strip */
       #status {
         padding: 5px 18px 9px;
@@ -531,27 +790,36 @@
   </head>
   <body>
     <div class="bar">
+      <button class="icon-btn" id="collapse-side" title="Toggle file tree">☰</button>
       <span class="brand">Second Brain</span>
       <span class="spacer"></span>
-      <button class="pill" id="open">Open note…</button>
-      <button class="pill primary" id="save" disabled>Save</button>
     </div>
 
     <div class="grid">
-      <!-- chats card -->
-      <section class="card">
-        <div class="ch">CHATS <button class="add" id="new-chat" title="New chat">+</button></div>
-        <div class="chats" id="chat-list"></div>
+      <!-- vault file tree -->
+      <section class="card sidebar" id="sidebar">
+        <div class="ch vault-head">
+          <span class="vault-name" id="vault-name">No vault</span>
+          <button class="add" id="vault-menu" title="Vault options">⋯</button>
+          <div class="vault-actions" id="vault-actions" hidden>
+            <button id="open-vault">Open vault…</button>
+            <button id="create-vault">Create vault…</button>
+          </div>
+        </div>
+        <div class="tree" id="file-tree"></div>
       </section>
 
       <!-- editor card -->
       <section class="card">
-        <div class="ed-meta" id="path">No note open</div>
+        <div class="ed-head">
+          <span class="ed-meta" id="path">No note open</span>
+          <span class="save-state" id="save-state"></span>
+        </div>
         <textarea
           id="editor"
           class="editor"
           spellcheck="false"
-          placeholder="Open a note from your vault to start editing."
+          placeholder="Select a note from your vault to start editing."
           disabled
         ></textarea>
         <section id="conflict">
@@ -567,6 +835,15 @@
 
       <!-- chat card -->
       <section class="card">
+        <div class="chat-head">
+          <button class="chat-switch" id="chat-switch">
+            <span id="current-chat-title">New chat</span>
+            <span class="chev">▾</span>
+          </button>
+          <button class="add" id="new-chat" title="New chat">+</button>
+          <div class="chat-list-pop" id="chat-list" hidden></div>
+        </div>
+
         <div class="chat-top">
           <div class="segmented" id="provider">
             <button data-provider="anthropic" class="on">Anthropic</button>
@@ -609,6 +886,26 @@
     </div>
 
     <div id="status"></div>
+
+    <!-- first-launch vault popup: open or create a vault, dismissable -->
+    <div class="modal-overlay" id="vault-modal" hidden>
+      <div class="modal">
+        <button class="modal-close" id="vault-modal-close" title="Close">×</button>
+        <h2 class="modal-title">Welcome to Second Brain</h2>
+        <p class="modal-sub">
+          Connect a vault — a folder of markdown notes — so your AI can read and
+          write to it. You can change this anytime from the ⋯ menu.
+        </p>
+        <div class="modal-actions">
+          <button class="modal-btn primary" id="modal-open-vault">
+            Open existing vault…
+          </button>
+          <button class="modal-btn" id="modal-create-vault">
+            Create new vault…
+          </button>
+        </div>
+      </div>
+    </div>
 
     <script type="module" src="./renderer.js"></script>
   </body>

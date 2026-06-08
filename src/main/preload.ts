@@ -5,7 +5,11 @@ import type { SecondBrainAPI } from "../shared/ipc.js";
 // main-process handler; the renderer gets plain data back, never a file handle
 // or a CRDT doc.
 const api: SecondBrainAPI = {
-  open: () => ipcRenderer.invoke("vault:open"),
+  vaultInfo: () => ipcRenderer.invoke("vault:info"),
+  vaultChoose: () => ipcRenderer.invoke("vault:choose"),
+  vaultCreate: () => ipcRenderer.invoke("vault:create"),
+  vaultFiles: () => ipcRenderer.invoke("vault:files"),
+  openPath: (path) => ipcRenderer.invoke("vault:openPath", path),
   save: (path, text) => ipcRenderer.invoke("vault:save", path, text),
   resolve: (path, resolution) =>
     ipcRenderer.invoke("vault:resolve", path, resolution),
@@ -18,6 +22,7 @@ const api: SecondBrainAPI = {
   chatCreate: () => ipcRenderer.invoke("chat:create"),
   chatLoad: (id) => ipcRenderer.invoke("chat:load", id),
   chatAppend: (id, msg) => ipcRenderer.invoke("chat:append", id, msg),
+  chatRename: (id, title) => ipcRenderer.invoke("chat:rename", id, title),
   chatDelete: (id) => ipcRenderer.invoke("chat:delete", id),
 };
 

@@ -1,4 +1,4 @@
-import type { ConflictResolution } from "../shared/ipc.js";
+import type { ConflictResolution, FileNode } from "../shared/ipc.js";
 import type {
   ChatMessage,
   GroundingMeta,
@@ -14,17 +14,201 @@ const $ = <T extends HTMLElement>(id: string): T => {
   return el as T;
 };
 
-const openBtn = $<HTMLButtonElement>("open");
-const saveBtn = $<HTMLButtonElement>("save");
-const editor = $<HTMLTextAreaElement>("editor");
-const pathLabel = $<HTMLSpanElement>("path");
 const statusBar = $<HTMLDivElement>("status");
-const conflictPanel = $<HTMLElement>("conflict");
-
-let currentPath: string | null = null;
 
 function setStatus(text: string): void {
   statusBar.textContent = text;
+}
+
+// ---------------------------------------------------------------------------
+// Vault sidebar: current vault header (open/create) + collapsible file tree.
+// ---------------------------------------------------------------------------
+
+const collapseBtn = $<HTMLButtonElement>("collapse-side");
+const vaultNameEl = $<HTMLSpanElement>("vault-name");
+const vaultMenuBtn = $<HTMLButtonElement>("vault-menu");
+const vaultActions = $<HTMLDivElement>("vault-actions");
+const openVaultBtn = $<HTMLButtonElement>("open-vault");
+const createVaultBtn = $<HTMLButtonElement>("create-vault");
+const fileTreeEl = $<HTMLDivElement>("file-tree");
+const vaultModal = $<HTMLDivElement>("vault-modal");
+const vaultModalClose = $<HTMLButtonElement>("vault-modal-close");
+const modalOpenVault = $<HTMLButtonElement>("modal-open-vault");
+const modalCreateVault = $<HTMLButtonElement>("modal-create-vault");
+
+// First-launch popup: shown automatically when no vault is set yet, and the
+// user can dismiss it (× or backdrop) to look around without choosing one.
+function showVaultModal(): void {
+  vaultModal.hidden = false;
+}
+function hideVaultModal(): void {
+  vaultModal.hidden = true;
+}
+vaultModalClose.addEventListener("click", () => hideVaultModal());
+vaultModal.addEventListener("click", (e) => {
+  if (e.target === vaultModal) hideVaultModal();
+});
+modalOpenVault.addEventListener("click", async () => {
+  const info = await window.secondBrain.vaultChoose();
+  if (info) {
+    hideVaultModal();
+    setStatus(`Opened vault: ${info.name}`);
+    await refreshVault();
+  }
+});
+modalCreateVault.addEventListener("click", async () => {
+  const info = await window.secondBrain.vaultCreate();
+  if (info) {
+    hideVaultModal();
+    setStatus(`Created vault: ${info.name}`);
+    await refreshVault();
+  }
+});
+
+function closePopovers(): void {
+  vaultActions.hidden = true;
+  chatListPop.hidden = true;
+}
+// Any outside click dismisses the open popovers; the toggles below
+// stopPropagation so they don't immediately re-close themselves.
+document.addEventListener("click", () => closePopovers());
+
+collapseBtn.addEventListener("click", () =>
+  document.body.classList.toggle("side-collapsed")
+);
+
+vaultMenuBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  chatListPop.hidden = true;
+  vaultActions.hidden = !vaultActions.hidden;
+});
+
+openVaultBtn.addEventListener("click", async () => {
+  const info = await window.secondBrain.vaultChoose();
+  vaultActions.hidden = true;
+  if (info) {
+    setStatus(`Opened vault: ${info.name}`);
+    await refreshVault();
+  }
+});
+
+createVaultBtn.addEventListener("click", async () => {
+  const info = await window.secondBrain.vaultCreate();
+  vaultActions.hidden = true;
+  if (info) {
+    setStatus(`Created vault: ${info.name}`);
+    await refreshVault();
+  }
+});
+
+async function refreshVault(): Promise<void> {
+  const info = await window.secondBrain.vaultInfo();
+  vaultNameEl.textContent = info.name ?? "No vault";
+  if (!info.root) showVaultModal();
+  await refreshTree();
+  await refreshGroundingStatus();
+}
+
+async function refreshTree(): Promise<void> {
+  const nodes = await window.secondBrain.vaultFiles();
+  fileTreeEl.replaceChildren();
+  if (nodes.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "tree-empty";
+    empty.textContent = "No notes yet";
+    fileTreeEl.appendChild(empty);
+    return;
+  }
+  for (const node of nodes) fileTreeEl.appendChild(renderNode(node, 0));
+}
+
+function renderNode(node: FileNode, depth: number): HTMLElement {
+  if (node.type === "dir") {
+    const wrap = document.createElement("div");
+    const row = document.createElement("div");
+    row.className = "tree-row dir";
+    row.style.paddingLeft = `${8 + depth * 14}px`;
+    const caret = document.createElement("span");
+    caret.className = "caret";
+    caret.textContent = "▸";
+    const name = document.createElement("span");
+    name.className = "tree-name";
+    name.textContent = node.name;
+    row.append(caret, name);
+
+    const children = document.createElement("div");
+    children.className = "tree-children";
+    children.hidden = true;
+    for (const child of node.children ?? [])
+      children.appendChild(renderNode(child, depth + 1));
+
+    row.addEventListener("click", () => {
+      children.hidden = !children.hidden;
+      caret.classList.toggle("open", !children.hidden);
+    });
+    wrap.append(row, children);
+    return wrap;
+  }
+
+  const row = document.createElement("div");
+  row.className = "tree-row file";
+  row.style.paddingLeft = `${8 + depth * 14}px`;
+  const name = document.createElement("span");
+  name.className = "tree-name";
+  name.textContent = node.name.replace(/\.(md|markdown)$/i, "");
+  row.appendChild(name);
+  row.addEventListener("click", () => void openFromTree(node.path, row));
+  return row;
+}
+
+async function openFromTree(path: string, row: HTMLElement): Promise<void> {
+  // Flush any pending edits on the note we're leaving before switching.
+  if (currentPath && !conflicted) await doSave();
+  const result = await window.secondBrain.openPath(path);
+  if (!result) {
+    setStatus("Couldn't open that note.");
+    return;
+  }
+  showConflict(false);
+  loadIntoEditor(result.path, result.text);
+  for (const r of Array.from(
+    fileTreeEl.querySelectorAll(".tree-row.file.active")
+  ))
+    r.classList.remove("active");
+  row.classList.add("active");
+}
+
+// ---------------------------------------------------------------------------
+// Editor: autosaves (debounced + on blur). A live save-state indicator reports
+// Saved / Saving… / Unsaved / Conflict so the user always knows where they
+// stand. Conflicts still surface the panel and pause autosave until resolved.
+// ---------------------------------------------------------------------------
+
+const editor = $<HTMLTextAreaElement>("editor");
+const pathLabel = $<HTMLSpanElement>("path");
+const saveStateEl = $<HTMLSpanElement>("save-state");
+const conflictPanel = $<HTMLElement>("conflict");
+
+let currentPath: string | null = null;
+let savedText = ""; // last text known to be on disk
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+let saving = false;
+let conflicted = false;
+
+const SAVE_DEBOUNCE_MS = 700;
+
+type SaveKind = "" | "saved" | "saving" | "dirty" | "conflict" | "error";
+function setSaveState(kind: SaveKind, msg?: string): void {
+  saveStateEl.className = `save-state ${kind}`;
+  const labels: Record<SaveKind, string> = {
+    "": "",
+    saved: "Saved",
+    saving: "Saving…",
+    dirty: "Unsaved changes",
+    conflict: "Conflict — resolve below",
+    error: "Couldn't save",
+  };
+  saveStateEl.textContent = msg ?? labels[kind];
 }
 
 function showConflict(show: boolean): void {
@@ -35,41 +219,71 @@ function loadIntoEditor(path: string, text: string): void {
   currentPath = path;
   editor.value = text;
   editor.disabled = false;
-  saveBtn.disabled = false;
   pathLabel.textContent = path;
+  savedText = text;
+  conflicted = false;
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  setSaveState("saved");
 }
 
-openBtn.addEventListener("click", async () => {
-  const result = await window.secondBrain.open();
-  if (!result) return; // cancelled
-  showConflict(false);
-  loadIntoEditor(result.path, result.text);
-  setStatus("Opened.");
-});
+function scheduleSave(): void {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => void doSave(), SAVE_DEBOUNCE_MS);
+}
 
-saveBtn.addEventListener("click", async () => {
-  if (!currentPath) return;
-  setStatus("Saving…");
-  const res = await window.secondBrain.save(currentPath, editor.value);
+async function doSave(): Promise<void> {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  if (!currentPath || saving || conflicted) return;
+  const text = editor.value;
+  if (text === savedText) {
+    setSaveState("saved");
+    return;
+  }
+  saving = true;
+  setSaveState("saving");
+  const res = await window.secondBrain.save(currentPath, text);
+  saving = false;
   switch (res.status) {
     case "saved":
-      showConflict(false);
-      setStatus("Saved.");
+      savedText = text;
+      // If the user kept typing during the await, the editor is dirty again.
+      if (editor.value !== savedText) {
+        setSaveState("dirty");
+        scheduleSave();
+      } else {
+        setSaveState("saved");
+      }
       break;
     case "conflict":
+      conflicted = true;
       showConflict(true);
-      setStatus("Conflict: this note also changed on disk.");
+      setSaveState("conflict");
       break;
     case "deleted":
-      setStatus("This note was deleted on disk. Save cancelled.");
+      setSaveState("error", "Note deleted on disk");
       break;
     case "renamed":
-      setStatus("This note was replaced on disk. Reopen it to continue.");
+      setSaveState("error", "Note replaced on disk — reopen it");
       break;
     case "error":
-      setStatus(`Couldn't save: ${res.message}`);
+      setSaveState("error", `Couldn't save: ${res.message}`);
       break;
   }
+}
+
+editor.addEventListener("input", () => {
+  if (!currentPath || conflicted) return;
+  setSaveState("dirty");
+  scheduleSave();
+});
+editor.addEventListener("blur", () => {
+  if (currentPath && !conflicted) void doSave();
 });
 
 async function resolveWith(resolution: ConflictResolution): Promise<void> {
@@ -78,18 +292,28 @@ async function resolveWith(resolution: ConflictResolution): Promise<void> {
   switch (res.status) {
     case "keep-mine":
       editor.value = res.text;
+      savedText = res.text;
+      conflicted = false;
       showConflict(false);
+      setSaveState("saved");
       setStatus("Kept your version.");
       break;
     case "take-theirs":
       editor.value = res.text;
+      savedText = res.text;
+      conflicted = false;
       showConflict(false);
+      setSaveState("saved");
       setStatus("Took the on-disk version.");
       break;
     case "keep-both":
       editor.value = res.theirsText;
+      savedText = res.theirsText;
+      conflicted = false;
       showConflict(false);
+      setSaveState("saved");
       setStatus(`Kept both. Your version saved to: ${res.minePath}`);
+      await refreshTree();
       break;
     case "error":
       setStatus(`Couldn't resolve: ${res.message}`);
@@ -129,7 +353,9 @@ const sendBtn = $<HTMLButtonElement>("send");
 const indexBtn = $<HTMLButtonElement>("index-btn");
 const groundState = $<HTMLSpanElement>("ground-state");
 const groundDot = $<HTMLSpanElement>("ground-dot");
-const chatListEl = $<HTMLDivElement>("chat-list");
+const chatSwitchBtn = $<HTMLButtonElement>("chat-switch");
+const currentChatTitleEl = $<HTMLSpanElement>("current-chat-title");
+const chatListPop = $<HTMLDivElement>("chat-list");
 const newChatBtn = $<HTMLButtonElement>("new-chat");
 
 // Curated model list per provider. First entry is the default selection.
@@ -170,6 +396,7 @@ function populateModels(id: ProviderId): void {
 // turn (multi-turn context). Switching chats swaps both out.
 let currentChatId: string | null = null;
 const transcript: ChatMessage[] = [];
+let chatSummaries: ChatSummary[] = [];
 let configured: ProviderId[] = [];
 let sending = false;
 let providerId: ProviderId = "anthropic";
@@ -178,9 +405,8 @@ function currentProvider(): ProviderId {
   return providerId;
 }
 
-// Segmented provider control (replaces the old <select>). Selecting a provider
-// updates the .on highlight, swaps in that provider's default model, and
-// refreshes the key status for the newly-selected provider.
+// Segmented provider control. Selecting a provider updates the .on highlight,
+// rebuilds the model dropdown for that provider, and refreshes the key status.
 function setProvider(id: ProviderId): void {
   providerId = id;
   for (const btn of providerButtons) {
@@ -285,17 +511,27 @@ function appendMessage(
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-// ---- Multi-chat list (D14) ----
+// ---- Multi-chat list (D14) — a dropdown in the chat header; rename inline ----
 
-function renderChatList(chats: ChatSummary[]): void {
-  chatListEl.replaceChildren();
-  for (const chat of chats) {
+function activeTitle(): string {
+  const a = chatSummaries.find((c) => c.id === currentChatId);
+  return a ? a.title : "New chat";
+}
+
+function renderChatList(): void {
+  chatListPop.replaceChildren();
+  for (const chat of chatSummaries) {
     const item = document.createElement("div");
     item.className = chat.id === currentChatId ? "chat-item active" : "chat-item";
 
     const title = document.createElement("span");
     title.className = "title";
     title.textContent = chat.title;
+    title.title = "Double-click to rename";
+    title.addEventListener("dblclick", (e) => {
+      e.stopPropagation();
+      startRename(chat, title, item);
+    });
     item.appendChild(title);
 
     const del = document.createElement("button");
@@ -308,13 +544,54 @@ function renderChatList(chats: ChatSummary[]): void {
     });
     item.appendChild(del);
 
-    item.addEventListener("click", () => void selectChat(chat.id));
-    chatListEl.appendChild(item);
+    item.addEventListener("click", () => {
+      chatListPop.hidden = true;
+      void selectChat(chat.id);
+    });
+    chatListPop.appendChild(item);
   }
+  currentChatTitleEl.textContent = activeTitle();
+}
+
+// Inline rename: swap the title for an input; Enter / blur commits, Esc cancels.
+function startRename(
+  chat: ChatSummary,
+  titleEl: HTMLSpanElement,
+  item: HTMLElement
+): void {
+  const input = document.createElement("input");
+  input.className = "rename-input";
+  input.value = chat.title;
+  input.addEventListener("click", (e) => e.stopPropagation());
+  item.replaceChild(input, titleEl);
+  input.focus();
+  input.select();
+
+  let done = false;
+  const commit = async (save: boolean): Promise<void> => {
+    if (done) return;
+    done = true;
+    const name = input.value.trim();
+    if (save && name && name !== chat.title) {
+      await window.secondBrain.chatRename(chat.id, name);
+    }
+    await refreshChatList();
+  };
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      void commit(true);
+    } else if (ev.key === "Escape") {
+      ev.preventDefault();
+      void commit(false);
+    }
+  });
+  input.addEventListener("blur", () => void commit(true));
 }
 
 async function refreshChatList(): Promise<void> {
-  renderChatList(await window.secondBrain.chatList());
+  chatSummaries = await window.secondBrain.chatList();
+  renderChatList();
 }
 
 /** Load a chat's persisted transcript into the active view. */
@@ -355,7 +632,17 @@ async function removeChat(id: string): Promise<void> {
   }
 }
 
-newChatBtn.addEventListener("click", () => void newChat());
+newChatBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  chatListPop.hidden = true;
+  void newChat();
+});
+
+chatSwitchBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  vaultActions.hidden = true;
+  chatListPop.hidden = !chatListPop.hidden;
+});
 
 // Grounding is ALWAYS ON — there is no toggle. This status line just reports,
 // calmly, whether the vault is connected so answers can use it. Three states:
@@ -533,5 +820,5 @@ async function initChats(): Promise<void> {
 
 populateModels(providerId);
 void refreshAiStatus();
-void refreshGroundingStatus();
+void refreshVault();
 void initChats();

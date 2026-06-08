@@ -156,6 +156,19 @@ export function aiGroundingStatus(): GroundingStatus {
 }
 
 /**
+ * Drop the in-memory grounding index and start fresh. Called when the user
+ * switches vaults — the index is vault-specific, so stale vectors must never
+ * bleed from one vault into another. The user re-indexes the new vault on demand.
+ */
+export function resetGrounding(): void {
+  try {
+    grounder = new GroundingService(new TransformersEmbedder());
+  } catch {
+    grounder = null;
+  }
+}
+
+/**
  * Incrementally re-index one note (called by the watcher and by the app's own
  * save path). No-op until a full index exists, so a single change never builds
  * a misleading one-note index. Never throws.

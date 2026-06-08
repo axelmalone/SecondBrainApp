@@ -35,6 +35,10 @@ export async function chatAppend(
   await store?.appendMessage(id, msg);
 }
 
+export async function chatRename(id: string, title: string): Promise<void> {
+  await store?.renameChat(id, title);
+}
+
 export async function chatDelete(id: string): Promise<void> {
   await store?.deleteChat(id);
 }

@@ -15,7 +15,8 @@ const TITLE_MAX = 60;
 
 type HeaderRecord = { t: "h"; id: string; createdAt: number };
 type MessageRecord = { t: "m" } & StoredMessage;
-type Record = HeaderRecord | MessageRecord;
+type RenameRecord = { t: "r"; title: string };
+type Record = HeaderRecord | MessageRecord | RenameRecord;
 
 function titleFrom(messages: StoredMessage[]): string {
   const firstUser = messages.find((m) => m.role === "user");
@@ -67,6 +68,15 @@ export class ChatStore {
     await fs.appendFile(this.file(id), JSON.stringify(rec) + "\n");
   }
 
+  /** Set a user-chosen title. Append-only: the latest rename record wins on
+   *  read, so this never rewrites earlier turns. Empty clears the override
+   *  (falling back to the first-message title). */
+  async renameChat(id: string, title: string): Promise<void> {
+    await fs.mkdir(this.dir, { recursive: true });
+    const rec: RenameRecord = { t: "r", title: title.slice(0, TITLE_MAX).trim() };
+    await fs.appendFile(this.file(id), JSON.stringify(rec) + "\n");
+  }
+
   /** Load a chat's full transcript, or null if it doesn't exist. */
   async loadChat(id: string): Promise<ChatSession | null> {
     const parsed = await this.read(id);
@@ -92,7 +102,7 @@ export class ChatStore {
       const last = parsed.messages[parsed.messages.length - 1];
       summaries.push({
         id,
-        title: titleFrom(parsed.messages),
+        title: parsed.title ? parsed.title : titleFrom(parsed.messages),
         createdAt: parsed.createdAt,
         updatedAt: last ? last.ts : parsed.createdAt,
         messageCount: parsed.messages.length,
@@ -109,7 +119,11 @@ export class ChatStore {
 
   private async read(
     id: string
-  ): Promise<{ createdAt: number; messages: StoredMessage[] } | null> {
+  ): Promise<{
+    createdAt: number;
+    messages: StoredMessage[];
+    title?: string;
+  } | null> {
     let raw: string;
     try {
       raw = await fs.readFile(this.file(id), "utf8");
@@ -117,6 +131,7 @@ export class ChatStore {
       return null;
     }
     let createdAt = 0;
+    let title: string | undefined;
     const messages: StoredMessage[] = [];
     for (const line of raw.split("\n")) {
       if (line.trim() === "") continue;
@@ -129,6 +144,7 @@ export class ChatStore {
         continue;
       }
       if (rec.t === "h") createdAt = rec.createdAt;
+      else if (rec.t === "r") title = rec.title || undefined; // latest wins
       else if (rec.t === "m") {
         const { t: _t, ...msg } = rec;
         messages.push(msg);
@@ -136,6 +152,8 @@ export class ChatStore {
     }
     // Header absent (e.g. its line was the torn one) → fall back to first turn.
     if (createdAt === 0) createdAt = messages[0]?.ts ?? Date.now();
-    return { createdAt, messages };
+    return title !== undefined
+      ? { createdAt, messages, title }
+      : { createdAt, messages };
   }
 }

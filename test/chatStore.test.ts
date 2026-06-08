@@ -63,6 +63,30 @@ describe("ChatStore basics (D14)", () => {
     expect(list[1]?.title).toBe("first chat topic");
   });
 
+  it("renameChat overrides the derived title; empty clears the override", async () => {
+    const store = await makeStore();
+    const { id } = await store.createChat();
+    await store.appendMessage(id, {
+      role: "user",
+      content: "derived title here",
+      ts: 10,
+    });
+
+    await store.renameChat(id, "My custom name");
+    let row = (await store.listChats()).find((c) => c.id === id);
+    expect(row?.title).toBe("My custom name");
+
+    // Latest rename record wins (append-only — no rewrite of earlier turns).
+    await store.renameChat(id, "Renamed again");
+    row = (await store.listChats()).find((c) => c.id === id);
+    expect(row?.title).toBe("Renamed again");
+
+    // Clearing the override falls back to the first-message title.
+    await store.renameChat(id, "");
+    row = (await store.listChats()).find((c) => c.id === id);
+    expect(row?.title).toBe("derived title here");
+  });
+
   it("an empty chat lists as 'New chat' with zero messages", async () => {
     const store = await makeStore();
     const { id } = await store.createChat();
