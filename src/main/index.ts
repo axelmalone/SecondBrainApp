@@ -263,10 +263,13 @@ function registerIpc(): void {
   );
 
   ipcMain.handle("proposal:list", () => proposals?.list() ?? []);
-  ipcMain.handle("proposal:approve", (_e, id: string) =>
-    proposals
-      ? proposals.approve(id)
-      : { status: "error" as const, message: "proposals unavailable" }
+  ipcMain.handle("proposal:diff", (_e, id: string) => proposals?.diff(id) ?? []);
+  ipcMain.handle(
+    "proposal:approve",
+    (_e, id: string, selectedHunkIds?: number[]) =>
+      proposals
+        ? proposals.approve(id, selectedHunkIds)
+        : { status: "error" as const, message: "proposals unavailable" }
   );
   ipcMain.handle("proposal:reject", (_e, id: string) => proposals?.reject(id));
   ipcMain.handle("proposal:edit", (_e, id: string, content: string) =>

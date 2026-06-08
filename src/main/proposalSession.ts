@@ -5,6 +5,8 @@ import type { DiskBaseline, GuardedApplyResult } from "../vault/index.js";
 import { isInside } from "./vaultFiles.js";
 import { ProposalStore } from "./proposalStore.js";
 import { applyAnchoredAppend, triviallyEqual } from "./proposalApply.js";
+import { diffBlocks, composeBlocks, allSelected } from "../shared/diff.js";
+import type { DiffBlock } from "../shared/diff.js";
 import type {
   AcceptanceStats,
   ApplyResult,
@@ -107,14 +109,69 @@ export class ProposalSession {
     return this.store.get(id);
   }
 
-  /** Apply (approve) a proposal. Dispatches by kind; never clobbers. */
-  async approve(id: string): Promise<ApplyResult> {
+  /**
+   * The diff the review UX renders (multi-hunk for update, an append-preview for
+   * append, all-add for create). Computed against the text the user reviewed
+   * against (baseText) so hunk ids are stable for partial approval.
+   */
+  async diff(id: string): Promise<DiffBlock[]> {
+    const p = await this.store.get(id);
+    if (!p) return [];
+    const abs = this.resolveSafe(p.draft.targetPath);
+    if (!abs) return [];
+    return (await this.blocksFor(p, abs)).blocks;
+  }
+
+  private async blocksFor(
+    p: StoredProposal,
+    abs: string
+  ): Promise<{ blocks: DiffBlock[]; baseExists: boolean }> {
+    let current = "";
+    let baseExists = false;
+    try {
+      current = await fs.readFile(abs, "utf8");
+      baseExists = true;
+    } catch {
+      /* note doesn't exist */
+    }
+    if (p.draft.kind === "create") {
+      return { blocks: diffBlocks("", p.draft.content), baseExists };
+    }
+    if (p.draft.kind === "update") {
+      const base = p.baseText ?? current;
+      return { blocks: diffBlocks(base, p.draft.content), baseExists };
+    }
+    // append: preview the re-spliced result against current disk content.
+    const preview =
+      applyAnchoredAppend(current, p.draft.anchor, p.draft.content) ??
+      current + p.draft.content;
+    return { blocks: diffBlocks(current, preview), baseExists };
+  }
+
+  /**
+   * Apply (approve) a proposal. With `selectedHunkIds` the user approved only a
+   * SUBSET of the diff's hunks (hunk-vs-whole): we compose the exact resulting
+   * text and write it as a guarded full-text edit. Without it, the whole
+   * proposal is applied by its kind. Never clobbers.
+   */
+  async approve(id: string, selectedHunkIds?: number[]): Promise<ApplyResult> {
     const p = await this.store.get(id);
     if (!p) return { status: "error", message: "proposal not found" };
     const abs = this.resolveSafe(p.draft.targetPath);
     if (!abs) return { status: "invalid" }; // mandatory security gate
 
     try {
+      if (selectedHunkIds !== undefined) {
+        const { blocks } = await this.blocksFor(p, abs);
+        if (!allSelected(blocks, new Set(selectedHunkIds))) {
+          const full = composeBlocks(blocks, new Set(selectedHunkIds));
+          // Record what the user actually chose (audit + the edited tally),
+          // then write the composed text as a guarded full-text edit.
+          await this.store.edit(id, { ...p.draft, kind: "update", content: full });
+          const edited = await this.store.get(id);
+          return await this.applyComposed(edited ?? p, abs, full);
+        }
+      }
       switch (p.draft.kind) {
         case "create":
           return await this.applyCreate(p, abs);
@@ -126,6 +183,37 @@ export class ProposalSession {
     } catch (err) {
       return { status: "error", message: String(err) };
     }
+  }
+
+  /** Guarded full-text write of a composed (partially-approved) result. */
+  private async applyComposed(
+    p: StoredProposal,
+    abs: string,
+    full: string
+  ): Promise<ApplyResult> {
+    let cur;
+    try {
+      cur = await readWithBaseline(abs);
+    } catch {
+      cur = null;
+    }
+    await this.store.markApplying(p.id, abs);
+    const r = cur
+      ? await guardedApply(abs, cur.baseline, full)
+      : await guardedApply(abs, undefined, full);
+    if (r.status === "saved") {
+      await this.store.markApplied(p.id, abs);
+      this.onApplied([abs]);
+      return { status: "applied", appliedPath: abs };
+    }
+    if (r.status === "conflict") {
+      await this.store.markStale(p.id, {
+        baseText: r.diskText,
+        note: "target changed during apply; review again",
+      });
+      return await this.reviewResult(p.id, cur ? "stale" : "collision");
+    }
+    return this.mapNonConflict(r);
   }
 
   private async applyCreate(p: StoredProposal, abs: string): Promise<ApplyResult> {

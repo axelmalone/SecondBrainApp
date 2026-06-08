@@ -24,7 +24,9 @@ const api: SecondBrainAPI = {
   aiGroundingStatus: () => ipcRenderer.invoke("ai:groundingStatus"),
   aiIndexVault: () => ipcRenderer.invoke("ai:indexVault"),
   proposalList: () => ipcRenderer.invoke("proposal:list"),
-  proposalApprove: (id) => ipcRenderer.invoke("proposal:approve", id),
+  proposalDiff: (id) => ipcRenderer.invoke("proposal:diff", id),
+  proposalApprove: (id, selectedHunkIds) =>
+    ipcRenderer.invoke("proposal:approve", id, selectedHunkIds),
   proposalReject: (id) => ipcRenderer.invoke("proposal:reject", id),
   proposalEdit: (id, content) => ipcRenderer.invoke("proposal:edit", id, content),
   proposalKeepBoth: (id) => ipcRenderer.invoke("proposal:keepBoth", id),

@@ -218,6 +218,81 @@ describe("ProposalSession.onVaultDirty — proactive staleness (4C)", () => {
   });
 });
 
+describe("ProposalSession.diff + hunk-vs-whole approval", () => {
+  it("exposes a multi-hunk diff and applies only the selected hunks", async () => {
+    const { session, vault } = await setup();
+    await fs.writeFile(path.join(vault, "u.md"), "a\nb\nc\nd\ne\n", "utf8");
+    const p = await session.create(
+      draft({ kind: "update", targetPath: "u.md", content: "a\nB\nc\nd\nE\n" }),
+      ref
+    );
+    const blocks = await session.diff(p!.id);
+    const changeIds = blocks
+      .filter((b) => b.type === "change")
+      .map((b) => (b as { id: number }).id);
+    expect(changeIds).toHaveLength(2);
+
+    // Approve ONLY the first hunk → only that change lands.
+    const res = await session.approve(p!.id, [changeIds[0]!]);
+    expect(res.status).toBe("applied");
+    expect(await read(path.join(vault, "u.md"))).toBe("a\nB\nc\nd\ne\n");
+  });
+
+  it("approving with all hunks selected applies the whole edit", async () => {
+    const { session, vault } = await setup();
+    await fs.writeFile(path.join(vault, "u.md"), "x\ny\n", "utf8");
+    const p = await session.create(
+      draft({ kind: "update", targetPath: "u.md", content: "X\nY\n" }),
+      ref
+    );
+    const blocks = await session.diff(p!.id);
+    const ids = blocks.filter((b) => b.type === "change").map((b) => (b as { id: number }).id);
+    const res = await session.approve(p!.id, ids);
+    expect(res.status).toBe("applied");
+    expect(await read(path.join(vault, "u.md"))).toBe("X\nY\n");
+  });
+
+  it("an append diff previews the fragment as additions", async () => {
+    const { session, vault } = await setup();
+    await fs.writeFile(path.join(vault, "log.md"), "# Log\n", "utf8");
+    const p = await session.create(
+      draft({ kind: "append", targetPath: "log.md", content: "- entry" }),
+      ref
+    );
+    const blocks = await session.diff(p!.id);
+    const change = blocks.find((b) => b.type === "change");
+    expect(change).toMatchObject({ add: ["- entry"] });
+  });
+});
+
+describe("ProposalSession acceptance stats", () => {
+  it("tallies approved / rejected / edited and the acceptance rate", async () => {
+    const { session, store, vault } = await setup();
+    await fs.writeFile(path.join(vault, "a.md"), "v1\n", "utf8");
+
+    const approved = await session.create(
+      draft({ kind: "update", targetPath: "a.md", content: "v2\n" }),
+      ref
+    );
+    await session.approve(approved!.id);
+
+    const rejected = await session.create(
+      draft({ kind: "create", targetPath: "b.md", content: "x" }),
+      ref
+    );
+    await session.reject(rejected!.id);
+
+    await session.create(draft({ kind: "create", targetPath: "c.md", content: "y" }), ref);
+
+    const stats = await store.acceptanceStats();
+    expect(stats.proposed).toBe(3);
+    expect(stats.approved).toBe(1);
+    expect(stats.rejected).toBe(1);
+    expect(stats.pending).toBe(1);
+    expect(stats.acceptanceRate).toBeCloseTo(0.5);
+  });
+});
+
 describe("ProposalSession.recoverOnLaunch — verify-then-reconcile (7A)", () => {
   it("marks applied when the append fragment is already on disk (never double-applies)", async () => {
     const { session, store, vault } = await setup();

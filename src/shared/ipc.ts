@@ -16,6 +16,7 @@ import type { ChatSession, ChatSummary, StoredMessage } from "./chat.js";
 import type { AcceptanceStats, ApplyResult, StoredProposal } from "./proposal.js";
 import type { RenderNode } from "./render.js";
 import type { Backlink, SearchHit } from "./search.js";
+import type { DiffBlock } from "./diff.js";
 
 export type {
   AiIndexResult,
@@ -30,6 +31,7 @@ export type { ChatSession, ChatSummary, StoredMessage } from "./chat.js";
 export type { AcceptanceStats, ApplyResult, StoredProposal } from "./proposal.js";
 export type { RenderNode, RenderTag } from "./render.js";
 export type { Backlink, SearchHit } from "./search.js";
+export type { DiffBlock } from "./diff.js";
 
 export type ConflictResolution = "keep-mine" | "take-theirs" | "keep-both";
 
@@ -108,8 +110,10 @@ export interface SecondBrainAPI {
   // ---- Write-back review queue (the proposal loop) ----
   /** Every proposal, folded, newest-updated first. */
   proposalList(): Promise<StoredProposal[]>;
-  /** Apply (approve) a proposal through the guarded safe-write layer. */
-  proposalApprove(id: string): Promise<ApplyResult>;
+  /** The multi-hunk diff to render for review (against the reviewed base). */
+  proposalDiff(id: string): Promise<DiffBlock[]>;
+  /** Apply (approve) a proposal; pass selected hunk ids for partial approval. */
+  proposalApprove(id: string, selectedHunkIds?: number[]): Promise<ApplyResult>;
   /** Reject a proposal (records the decision; nothing is written). */
   proposalReject(id: string): Promise<void>;
   /** Replace a proposal's content with the user's edited text (resets to pending). */

@@ -1,4 +1,11 @@
-import type { ConflictResolution, FileNode, RenderNode } from "../shared/ipc.js";
+import type {
+  ApplyResult,
+  ConflictResolution,
+  DiffBlock,
+  FileNode,
+  RenderNode,
+  StoredProposal,
+} from "../shared/ipc.js";
 import type {
   ChatMessage,
   GroundingMeta,
@@ -487,6 +494,226 @@ async function runSearch(raw: string): Promise<void> {
   }
   fileTreeEl.hidden = true;
   searchResults.hidden = false;
+}
+
+// ---------------------------------------------------------------------------
+// Review queue — the write-back trust surface. Proposals from chat turns appear
+// here as diffs; the user approves (whole or per-hunk), edits, rejects, or keeps
+// both. Every decision is recorded in the auditable proposal log; the acceptance
+// tally is the 2-week-gate signal. Diffs are computed in main; the renderer only
+// builds DOM (createElement/textContent) — no innerHTML.
+// ---------------------------------------------------------------------------
+
+const reviewQueue = $<HTMLElement>("review-queue");
+const rqList = $<HTMLDivElement>("rq-list");
+const rqStats = $<HTMLSpanElement>("rq-stats");
+
+const ACTIONABLE = new Set(["pending", "stale"]);
+
+async function refreshProposals(): Promise<void> {
+  const all = await window.secondBrain.proposalList();
+  const actionable = all.filter((p) => ACTIONABLE.has(p.state));
+  rqList.replaceChildren();
+  for (const p of actionable) rqList.appendChild(await buildProposalCard(p));
+  reviewQueue.hidden = actionable.length === 0;
+  await refreshAcceptanceStats();
+}
+
+async function refreshAcceptanceStats(): Promise<void> {
+  const s = await window.secondBrain.proposalStats();
+  const pct = Math.round(s.acceptanceRate * 100);
+  rqStats.textContent =
+    s.proposed === 0
+      ? ""
+      : `${s.proposed} proposed · ${s.approved} approved · ${s.rejected} rejected · ${pct}% accepted`;
+}
+
+function badge(text: string, cls = ""): HTMLSpanElement {
+  const b = document.createElement("span");
+  b.className = `rq-badge${cls ? " " + cls : ""}`;
+  b.textContent = text;
+  return b;
+}
+
+async function buildProposalCard(p: StoredProposal): Promise<HTMLElement> {
+  const card = document.createElement("div");
+  card.className = `rq-card${p.state === "stale" ? " stale" : ""}`;
+
+  const head = document.createElement("div");
+  head.className = "rq-kind";
+  head.appendChild(badge(p.draft.kind));
+  if (p.state === "stale") head.appendChild(badge("stale", "stale"));
+  if (p.edited) head.appendChild(badge("edited", "edited"));
+  const pathEl = document.createElement("span");
+  pathEl.className = "rq-path";
+  pathEl.textContent = p.draft.targetPath;
+  head.appendChild(pathEl);
+  card.appendChild(head);
+
+  if (p.draft.reason) {
+    const reason = document.createElement("div");
+    reason.className = "rq-reason";
+    reason.textContent = p.draft.reason;
+    card.appendChild(reason);
+  }
+  if (p.note) {
+    const note = document.createElement("div");
+    note.className = "rq-reason";
+    note.textContent = p.note;
+    card.appendChild(note);
+  }
+
+  // Multi-hunk diff with a per-hunk include toggle (hunk-vs-whole approval).
+  const blocks = await window.secondBrain.proposalDiff(p.id);
+  const selected = new Set<number>(
+    blocks.filter((b) => b.type === "change").map((b) => (b as { id: number }).id)
+  );
+  card.appendChild(buildDiff(blocks, selected));
+
+  // Actions.
+  const actions = document.createElement("div");
+  actions.className = "rq-actions";
+
+  const approve = document.createElement("button");
+  approve.className = "primary";
+  approve.textContent = "Approve";
+  approve.addEventListener("click", () => {
+    const allIds = blocks.filter((b) => b.type === "change").length;
+    const partial = selected.size < allIds;
+    void runApply(
+      p.id,
+      window.secondBrain.proposalApprove(p.id, partial ? [...selected] : undefined)
+    );
+  });
+  actions.appendChild(approve);
+
+  const editBtn = document.createElement("button");
+  editBtn.textContent = "Edit";
+  editBtn.addEventListener("click", () => openInlineEdit(card, p));
+  actions.appendChild(editBtn);
+
+  const reject = document.createElement("button");
+  reject.className = "danger";
+  reject.textContent = "Reject";
+  reject.addEventListener("click", () => {
+    void window.secondBrain.proposalReject(p.id).then(() => refreshProposals());
+  });
+  actions.appendChild(reject);
+
+  // keep-both is the explicit collision escape hatch (offered when stale).
+  if (p.state === "stale") {
+    const keepBoth = document.createElement("button");
+    keepBoth.textContent = "Keep both";
+    keepBoth.addEventListener("click", () =>
+      void runApply(p.id, window.secondBrain.proposalKeepBoth(p.id))
+    );
+    actions.appendChild(keepBoth);
+  }
+
+  card.appendChild(actions);
+  return card;
+}
+
+function buildDiff(blocks: DiffBlock[], selected: Set<number>): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = "rq-diff";
+  for (const block of blocks) {
+    if (block.type === "context") {
+      for (const line of block.lines) {
+        const el = document.createElement("div");
+        el.className = "rq-line ctx";
+        el.textContent = line === "" ? " " : line;
+        wrap.appendChild(el);
+      }
+      continue;
+    }
+    const hunk = document.createElement("div");
+    hunk.className = "rq-hunk";
+    const toggle = document.createElement("label");
+    toggle.className = "rq-hunk-toggle";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = true;
+    cb.addEventListener("change", () => {
+      if (cb.checked) selected.add(block.id);
+      else selected.delete(block.id);
+    });
+    toggle.appendChild(cb);
+    hunk.appendChild(toggle);
+    const lines = document.createElement("div");
+    lines.className = "rq-hunk-lines";
+    for (const d of block.del) {
+      const el = document.createElement("div");
+      el.className = "rq-line del";
+      el.textContent = `- ${d}`;
+      lines.appendChild(el);
+    }
+    for (const a of block.add) {
+      const el = document.createElement("div");
+      el.className = "rq-line add";
+      el.textContent = `+ ${a}`;
+      lines.appendChild(el);
+    }
+    hunk.appendChild(lines);
+    wrap.appendChild(hunk);
+  }
+  return wrap;
+}
+
+function openInlineEdit(card: HTMLElement, p: StoredProposal): void {
+  if (card.querySelector(".rq-edit-area")) return; // already editing
+  const area = document.createElement("textarea");
+  area.className = "rq-edit-area";
+  area.value = p.draft.content;
+  const actions = document.createElement("div");
+  actions.className = "rq-actions";
+  const save = document.createElement("button");
+  save.className = "primary";
+  save.textContent = "Save & keep in queue";
+  save.addEventListener("click", () => {
+    void window.secondBrain.proposalEdit(p.id, area.value).then(() => refreshProposals());
+  });
+  const cancel = document.createElement("button");
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => {
+    area.remove();
+    actions.remove();
+  });
+  actions.append(save, cancel);
+  card.append(area, actions);
+  area.focus();
+}
+
+/** Run an apply IPC call, surface its outcome, and refresh the queue + editor. */
+async function runApply(id: string, call: Promise<ApplyResult>): Promise<void> {
+  const res = await call;
+  switch (res.status) {
+    case "applied":
+      setStatus(`Applied to ${res.appliedPath}.`);
+      // If the applied note is open, reload it so the editor shows the new text.
+      if (currentPath === res.appliedPath) await openNoteByPath(res.appliedPath);
+      break;
+    case "needs-review":
+      setStatus(
+        res.reason === "collision"
+          ? "A note already exists there — review or keep both."
+          : "The note changed on disk — re-review the updated diff."
+      );
+      break;
+    case "deleted":
+      setStatus("The target note was deleted.");
+      break;
+    case "renamed":
+      setStatus("The target note was replaced on disk.");
+      break;
+    case "invalid":
+      setStatus("That proposal's path is outside the vault — refused.");
+      break;
+    case "error":
+      setStatus(`Couldn't apply: ${res.message}`);
+      break;
+  }
+  await refreshProposals();
 }
 
 async function refreshBacklinks(): Promise<void> {
@@ -1091,10 +1318,11 @@ async function send(): Promise<void> {
   appendMessage("user", text);
   // Persist the user turn immediately, before the (slow, fallible) model call,
   // so a crash or quit mid-request never loses what the user typed.
+  const turnTs = Date.now();
   await window.secondBrain.chatAppend(chatId, {
     role: "user",
     content: text,
-    ts: Date.now(),
+    ts: turnTs,
   });
   await refreshChatList(); // title/order update from the first user message
   setStatus("Thinking…");
@@ -1105,7 +1333,8 @@ async function send(): Promise<void> {
       model: { provider: currentProvider(), model: modelSelect.value },
       messages: transcript,
     },
-    { ground: true }
+    // chatId + turnTs let a proposal from this turn be backref'd in the store.
+    { ground: true, chatId, turnTs }
   );
 
   hideThinking();
@@ -1122,7 +1351,13 @@ async function send(): Promise<void> {
       ts: Date.now(),
       grounding: res.grounding,
     });
-    setStatus("Ready.");
+    // A proposed vault edit this turn → surface it in the review queue.
+    if (res.proposal) {
+      setStatus("Proposed an edit — review it below.");
+      await refreshProposals();
+    } else {
+      setStatus("Ready.");
+    }
   } else {
     // The user turn was already persisted, so the in-memory transcript keeps it
     // too (memory stays in sync with disk). The error bubble isn't persisted —
@@ -1165,3 +1400,4 @@ populateModels(providerId);
 void refreshAiStatus();
 void refreshVault();
 void initChats();
+void refreshProposals();
