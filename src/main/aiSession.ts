@@ -7,8 +7,9 @@ import { runProposalTurn } from "../gateway/propose.js";
 import { proposalPolicyMessage } from "../gateway/proposalPrompt.js";
 import type { ProposalDraft, StoredProposal } from "../shared/proposal.js";
 import * as path from "node:path";
+import * as os from "node:os";
 import { GroundingService } from "../grounding/vaultIndexer.js";
-import { ChildProcessEmbedder } from "../grounding/childEmbedder.js";
+import { PooledEmbedder } from "../grounding/pooledEmbedder.js";
 import { ElectronKeychain } from "./keychainElectron.js";
 import type {
   AiIndexResult,
@@ -26,31 +27,34 @@ import type {
 let keyStore: KeyStore | null = null;
 let gateway: ModelGateway | null = null;
 let grounder: GroundingService | null = null;
-let embedder: ChildProcessEmbedder | null = null;
+let embedder: PooledEmbedder | null = null;
 
 /** 384-dim all-MiniLM-L6-v2. */
 const EMBED_DIMENSION = 384;
+/** Worker processes for indexing. N independent stock-Node children = real
+ *  multi-core (one worker never saturates a core). Capped to bound RAM
+ *  (~400MB/worker); workers idle-reap after an index so it's transient. */
+const POOL_SIZE = Math.max(1, Math.min(4, os.cpus().length - 1));
 
 /**
- * Build the embedder. The real model runs in a STOCK-NODE child process (via
+ * Build the embedder pool. The model runs in STOCK-NODE child processes (via
  * tsx), NOT the Electron main process — onnxruntime-node is a native addon that
- * SIGTRAPs the main process. Disposes any prior child first (vault switch).
+ * SIGTRAPs the main process. Disposes any prior pool first (vault switch).
  *
  * NOTE (D17 / eventual packaged-build fix): this spawns the .ts worker via tsx,
  * which only exists in dev. A packaged build can't rely on tsx or src/ — it must
  * bundle the model + onnxruntime and fork compiled JS (or use a utilityProcess).
  */
-function makeEmbedder(): ChildProcessEmbedder {
+function makeEmbedder(): PooledEmbedder {
   embedder?.dispose();
   // __dirname is <root>/dist/main at runtime.
   const root = path.join(__dirname, "..", "..");
   const tsx = path.join(root, "node_modules", ".bin", "tsx");
   const child = path.join(root, "src", "grounding", "embedderChild.ts");
-  embedder = new ChildProcessEmbedder({
-    command: tsx,
-    args: [child],
-    dimension: EMBED_DIMENSION,
-  });
+  embedder = new PooledEmbedder(
+    { command: tsx, args: [child], dimension: EMBED_DIMENSION },
+    POOL_SIZE
+  );
   return embedder;
 }
 
@@ -225,7 +229,15 @@ export async function aiSend(
 
 export function aiGroundingStatus(): GroundingStatus {
   if (!grounder) {
-    return { ready: false, indexing: false, notes: 0, chunks: 0, processed: 0, total: 0 };
+    return {
+      ready: false,
+      indexing: false,
+      notes: 0,
+      chunks: 0,
+      processed: 0,
+      total: 0,
+      notesTotal: 0,
+    };
   }
   return grounder.status();
 }

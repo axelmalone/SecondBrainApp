@@ -12,6 +12,10 @@ export interface ChildEmbedderSpec {
   args: string[];
   /** Embedding dimensionality (must match the model). */
   dimension: number;
+  /** Kill the (memory-heavy) child after this many ms with no work, so a wide
+   *  index pool doesn't hold ~400MB/worker forever; it respawns on next embed.
+   *  0 disables. Default 30s. */
+  idleMs?: number;
 }
 
 interface Pending {
@@ -33,25 +37,29 @@ interface Pending {
 export class ChildProcessEmbedder implements Embedder {
   readonly dimension: number;
   private readonly spec: ChildEmbedderSpec;
+  private readonly idleMs: number;
   private child: Worker | null = null;
   private ready: Promise<void> | null = null;
   private readonly pending = new Map<number, Pending>();
   private nextId = 0;
   private stdoutBuffer = "";
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(spec: ChildEmbedderSpec) {
     this.spec = spec;
     this.dimension = spec.dimension;
+    this.idleMs = spec.idleMs ?? 30_000;
   }
 
   async embed(texts: string[]): Promise<number[][]> {
     if (texts.length === 0) return [];
+    this.clearIdle(); // a request is starting; don't reap the child under us
     await this.ensureChild();
     const child = this.child;
     if (!child) throw new Error("embedder child is not running");
 
     const id = this.nextId++;
-    return new Promise<number[][]>((resolve, reject) => {
+    const result = new Promise<number[][]>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       child.stdin.write(JSON.stringify({ id, texts }) + "\n", (err) => {
         if (err) {
@@ -60,14 +68,46 @@ export class ChildProcessEmbedder implements Embedder {
         }
       });
     });
+    try {
+      return await result;
+    } finally {
+      this.armIdle(); // idle again → eligible for reaping after idleMs
+    }
   }
 
   /** Stop the child (e.g. on vault switch). Safe to call when not running. */
   dispose(): void {
+    this.clearIdle();
     this.rejectAll(new Error("embedder disposed"));
     this.child?.kill();
     this.child = null;
     this.ready = null;
+  }
+
+  private clearIdle(): void {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+  }
+
+  /** Reap the child after idleMs of no work (it respawns lazily on next embed).
+   *  unref'd so the timer never keeps the process alive on its own. */
+  private armIdle(): void {
+    if (this.idleMs <= 0) return;
+    this.clearIdle();
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = null;
+      if (this.pending.size > 0) {
+        this.armIdle(); // still busy — check again later
+        return;
+      }
+      this.child?.kill();
+      this.child = null;
+      this.ready = null;
+      this.stdoutBuffer = "";
+    }, this.idleMs);
+    this.idleTimer.unref?.();
   }
 
   private ensureChild(): Promise<void> {
