@@ -182,6 +182,35 @@
 - **Effort:** S (human) / S (CC). **Priority:** P1.5 (do alongside installer setup).
   **Depends on:** an Electron packaging/installer pipeline existing.
 
+### Index progress reads as a note count, not chunks (UI clarity, 2026-06-08)
+- **What:** The index progress line shows a bare number ("Indexing your vault… 43% (620/1450)")
+  that is a CHUNK count, not a note count. Relabel it to name the unit and ideally show notes
+  too, e.g. "Indexing… 43% · 1620/3788 sections (210 notes)".
+- **Why:** A ~210-note vault produced "3788 things to index" and reasonably read as phantom
+  notes. Each note splits into ~18 chunks (one per heading + ~1000-char packing in
+  `chunkMarkdown`), so the chunk count dwarfs the note count. The number is correct; only the
+  label is ambiguous. Cheap trust fix — an opaque "3788" makes the index look broken.
+- **Context:** Raised by Axel 2026-06-08 watching the new progress readout (added with the
+  batched indexer). Cosmetic; deliberately deferred — fold into the next grounding-UX change.
+- **Effort:** XS (human) / XS (CC). **Priority:** P1.5 (do with the indexing-speed work below).
+
+### Speed up first-index throughput: pipeline batches + multi-thread ONNX (2026-06-08)
+- **What:** The batched indexer still under-saturates the CPU. Two levers: (1) PIPELINE — let
+  the host queue several embed batches ahead so the single-threaded model never waits for the
+  next batch over the stdio round-trip; (2) enable multi-threaded ONNX intra-op so inference
+  uses more than one core. A larger batch size to amortize per-call overhead is worth testing.
+- **Why:** Diagnosed by sampling the embedder child during a live index: it sat at ~33% of ONE
+  core on an 8-core machine, idle between awaited batches — so a first index of a ~210-note
+  (3788-chunk) vault takes minutes. Batching removed the per-note round-trip waste; pipelining +
+  threads attack what's left of raw first-index speed. NOTE: D16 (persist + reconcile) is higher
+  leverage — it removes the RECURRING cost (re-embedding the whole vault every launch). Do D16
+  first; do this to make the one-time / changed-note index fast.
+- **Context:** Diagnosed 2026-06-08 after the batching + progress change. The embedder runs in a
+  stock-Node child (`src/grounding/childEmbedder.ts` + `embedderChild.ts`), so the ONNX threading
+  config lives there.
+- **Effort:** S (human) / S–M (CC). **Priority:** P1.5. **Depends on:** the child-process
+  embedder (done); best paired with D16.
+
 ## P2 — Deferred (from CEO plan 2026-06-04)
 
 > CONFIRMED DEFERRED (D15, 2026-06-07): indie-vs-venture, open-core distribution, and
