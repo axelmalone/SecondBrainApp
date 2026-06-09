@@ -244,3 +244,45 @@
   (renderer.ts:369) so it auto-selects as default; 4.6 is one entry down. OpenAI list
   (gpt-4o/o1) is also a generation behind. Product decision (which model new users land on),
   not a bug — reorder the array if you want 4.6 as default. Low.
+
+## P1.5 — Personable assistant (from /plan-ceo-review 2026-06-09)
+
+### Phase 2 — agentic tool loop + read/explore tools
+- **What:** A bounded multi-step tool loop (tool_use → run tool → feed result → continue,
+  ~6 steps) with a provider-agnostic message model + per-adapter serialization, plus
+  read tools: search_vault, read_note, backlinks, list_recent_notes, get_active_note,
+  list_notes. Lets the assistant EXPLORE the vault, not just receive top-k chunks.
+- **Why:** Turns the document-fetcher into an assistant that can dig. The on-ramp to the
+  proactive-agent dream-state (scheduled agents = tool users into the same review queue).
+- **Context:** Deferred from the assistant spec via /plan-ceo-review (approach C: persona
+  first, loop second). Reuses the existing tool-use plumbing (ChatRequest.tools/toolCalls,
+  both adapters, parseProposal) + indexes (SearchIndex/LinkIndex/grounding/loadNote). The
+  real net-new cost is the tool-result message model + the loop orchestrator. CEO plan:
+  ~/.gstack/projects/axelmalone-SecondBrainApp/ceo-plans/2026-06-09-assistant-persona.md
+- **Effort:** L (human) / M (CC). **Priority:** P1.5. **Depends on:** Phase 1 (persona)
+  shipping and proving it moves the needle (validation gate). **Gets its own /plan-eng-review.**
+
+### Prompt-injection hardening (before Phase 2 / before external-content ingest)
+- **What:** Treat vault content that enters the model's instructions as untrusted. The
+  persona file (_assistant.md) becomes part of the system prompt; Phase 2 tools will read
+  arbitrary notes into context. Add a boundary so a poisoned note can't hijack the
+  assistant (e.g. clearly delimit user-data vs instructions, never let retrieved note text
+  be interpreted as system instructions, sanitize/label injected content).
+- **Why:** The product roadmap ingests external content (research/clipper). External text
+  in the vault + that text reaching the prompt = classic prompt injection. Low risk in
+  Phase 1 (persona is user-authored + queue-approved); rises sharply with ingest + tools.
+- **Context:** Flagged in the assistant CEO review (2026-06-09). Not a Phase-1 blocker.
+- **Effort:** M (human) / S (CC). **Priority:** P1.5. **Depends on:** lands with/before
+  Phase 2 and before any external-ingest feature.
+
+### Grounding × persona token budget
+- **What:** Persona + goals + recent-activity context + always-on grounding all prepend
+  every turn. Set sane caps in Phase 1 (e.g. ~5 recent titles, bounded sample) and revisit
+  prompt caching / budget allocation at eng-review.
+- **Why:** Unbounded prepended context inflates cost/latency and can crowd out the
+  conversation. The stable persona/policy should be cache-friendly; the volatile context
+  should be bounded.
+- **Context:** Flagged in the assistant CEO review (2026-06-09). Partly Phase 1 (caps),
+  partly eng-review (caching strategy).
+- **Effort:** S (human) / S (CC). **Priority:** P1.5. **Depends on:** Phase 1 persona +
+  recent-activity context.
