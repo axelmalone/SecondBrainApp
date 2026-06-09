@@ -11,13 +11,16 @@ import {
   readPersonaFile,
   resolvePersonaText,
   PersonaStore,
-  readActiveNoteContext,
+  activeNoteMessage,
   sampleVault,
   buildBootstrapMessages,
-  recentActivityMessage,
+  formatRecentActivity,
+  assembleTurnMessages,
+  truncate,
   personaFileStatus,
   PERSONA_STALE_DAYS,
 } from "../src/main/personaContext.js";
+import type { ChatMessage } from "../src/shared/ai.js";
 import { recentMarkdown } from "../src/main/vaultScan.js";
 import { PROPOSE_TOOL_NAME } from "../src/shared/proposal.js";
 
@@ -177,50 +180,90 @@ describe("resolvePersonaText (file wins, fallback fills in)", () => {
   });
 });
 
-describe("readActiveNoteContext (1B)", () => {
-  it("returns null with no root or no path", async () => {
-    expect(await readActiveNoteContext(null, "/x/note.md")).toBeNull();
-    const root = await tmp();
-    expect(await readActiveNoteContext(root, undefined)).toBeNull();
+describe("activeNoteMessage (1B, live editor buffer)", () => {
+  const root = "/vault";
+
+  it("returns null with no root or no path", () => {
+    expect(activeNoteMessage(null, "/x/note.md", "hi")).toBeNull();
+    expect(activeNoteMessage(root, undefined, "hi")).toBeNull();
   });
 
-  it("returns null for a path outside the vault (traversal guard)", async () => {
-    const root = await tmp();
-    const outside = path.join(root, "..", "escape.md");
-    expect(await readActiveNoteContext(root, outside)).toBeNull();
+  it("returns null for a path outside the vault (traversal guard)", () => {
+    expect(activeNoteMessage(root, "/vault/../escape.md", "hi")).toBeNull();
   });
 
-  it("returns null for a non-markdown file", async () => {
-    const root = await tmp();
-    const p = path.join(root, "image.png");
-    await fs.writeFile(p, "x", "utf8");
-    expect(await readActiveNoteContext(root, p)).toBeNull();
+  it("returns null for a non-markdown file", () => {
+    expect(activeNoteMessage(root, "/vault/image.png", "hi")).toBeNull();
   });
 
-  it("returns null when the file can't be read", async () => {
-    const root = await tmp();
-    expect(await readActiveNoteContext(root, path.join(root, "missing.md"))).toBeNull();
-  });
-
-  it("injects a system message naming the note and its content", async () => {
-    const root = await tmp();
-    const p = path.join(root, "Projects", "crm.md");
-    await fs.mkdir(path.dirname(p), { recursive: true });
-    await fs.writeFile(p, "# CRM\nbuild the thing", "utf8");
-    const msg = await readActiveNoteContext(root, p);
+  it("injects the live buffer text and the note's relative path", () => {
+    const msg = activeNoteMessage(root, "/vault/Projects/crm.md", "# CRM\nbuild the thing");
     expect(msg?.role).toBe("system");
     expect(msg?.content).toContain("Projects/crm.md");
     expect(msg?.content).toContain("build the thing");
+    expect(msg?.content.toLowerCase()).toContain("live editor contents");
   });
 
-  it("caps an over-long note", async () => {
-    const root = await tmp();
-    const p = path.join(root, "big.md");
-    await fs.writeFile(p, "y".repeat(ACTIVE_NOTE_MAX_CHARS + 3000), "utf8");
-    const msg = await readActiveNoteContext(root, p);
+  it("for a brand-new / empty note, injects the NAME but flags it empty", () => {
+    const msg = activeNoteMessage(root, "/vault/new.md", "   ");
+    expect(msg?.content).toContain("new.md");
+    expect(msg?.content.toLowerCase()).toContain("empty");
+  });
+
+  it("caps an over-long buffer", () => {
+    const msg = activeNoteMessage(root, "/vault/big.md", "y".repeat(ACTIVE_NOTE_MAX_CHARS + 3000));
     expect(msg?.content).toContain("…(note truncated)");
     const run = msg!.content.match(/y+/)?.[0] ?? "";
     expect(run.length).toBeLessThanOrEqual(ACTIVE_NOTE_MAX_CHARS);
+  });
+});
+
+describe("truncate", () => {
+  it("leaves short text untouched", () => {
+    expect(truncate("hi", 10, "x")).toBe("hi");
+  });
+  it("slices and appends a labeled notice", () => {
+    const out = truncate("a".repeat(20), 5, "note");
+    expect(out).toBe("aaaaa\n\n…(note truncated)");
+  });
+});
+
+describe("assembleTurnMessages (locked ordering)", () => {
+  const m = (content: string): ChatMessage => ({ role: "system", content });
+  const policy = m("policy");
+  const persona = [m("base"), m("profile")];
+  const conversation: ChatMessage[] = [{ role: "user", content: "hi" }];
+
+  it("orders policy → persona → active → recent → grounding → conversation", () => {
+    const out = assembleTurnMessages({
+      policy,
+      persona,
+      activeNote: m("active"),
+      recentActivity: m("recent"),
+      grounding: [m("ground")],
+      conversation,
+    });
+    expect(out.map((x) => x.content)).toEqual([
+      "policy",
+      "base",
+      "profile",
+      "active",
+      "recent",
+      "ground",
+      "hi",
+    ]);
+  });
+
+  it("drops null/empty slots but keeps the order", () => {
+    const out = assembleTurnMessages({
+      policy,
+      persona: [m("base")],
+      activeNote: null,
+      recentActivity: null,
+      grounding: [],
+      conversation,
+    });
+    expect(out.map((x) => x.content)).toEqual(["policy", "base", "hi"]);
   });
 });
 
@@ -297,24 +340,16 @@ describe("recentMarkdown (1C, mtime-sorted)", () => {
   });
 });
 
-describe("recentActivityMessage (1C)", () => {
-  it("returns null for an empty vault", async () => {
-    const root = await tmp();
-    expect(await recentActivityMessage(root)).toBeNull();
-    expect(await recentActivityMessage(null)).toBeNull();
+describe("formatRecentActivity (1C, pure)", () => {
+  it("returns null for an empty title list", () => {
+    expect(formatRecentActivity([])).toBeNull();
   });
 
-  it("lists recent titles newest-first, capped, excluding the active note", async () => {
-    const root = await tmp();
-    await writeAged(root, "Old.md", 30);
-    await writeAged(root, "Mid.md", 10);
-    const active = await writeAged(root, "Active.md", 1);
-    const msg = await recentActivityMessage(root, active, 5);
+  it("renders a newest-first bullet list as a system message", () => {
+    const msg = formatRecentActivity(["Mid", "Old"]);
     expect(msg?.role).toBe("system");
     expect(msg?.content).toContain("- Mid");
     expect(msg?.content).toContain("- Old");
-    // The active note is surfaced via its own context message, not here.
-    expect(msg?.content).not.toContain("- Active");
   });
 });
 
@@ -348,5 +383,41 @@ describe("personaFileStatus (1C staleness)", () => {
     expect(status.exists).toBe(true);
     expect(status.stale).toBe(true);
     expect(status.ageDays).toBeGreaterThanOrEqual(PERSONA_STALE_DAYS);
+  });
+
+  it("a recent approved-edit timestamp overrides an old file mtime (F6)", async () => {
+    const root = await tmp();
+    // File touched long ago (e.g. by a sync), but the user approved an edit today.
+    await writeAged(root, PERSONA_FILE, PERSONA_STALE_DAYS + 30);
+    const status = await personaFileStatus(root, Date.now(), Date.now());
+    expect(status.stale).toBe(false);
+    expect(status.ageDays).toBe(0);
+  });
+
+  it("an old approved-edit timestamp makes a freshly-touched file stale (F6)", async () => {
+    const root = await tmp();
+    await fs.writeFile(path.join(root, PERSONA_FILE), "me", "utf8"); // fresh mtime
+    const oldEdit = Date.now() - (PERSONA_STALE_DAYS + 5) * 86_400_000;
+    const status = await personaFileStatus(root, Date.now(), oldEdit);
+    expect(status.stale).toBe(true);
+  });
+});
+
+describe("PersonaStore edit-stamp (F6)", () => {
+  it("editedAt is null before any mark, then round-trips", async () => {
+    const root = await tmp();
+    const store = new PersonaStore(path.join(root, "persona"));
+    expect(await store.editedAt(root)).toBeNull();
+    await store.markEdited(root, 1234567890);
+    expect(await store.editedAt(root)).toBe(1234567890);
+  });
+
+  it("set() stamps an edit, and stamps are isolated per vault", async () => {
+    const root = await tmp();
+    const store = new PersonaStore(path.join(root, "persona"));
+    await store.markEdited("/vault/a", 111);
+    await store.markEdited("/vault/b", 222);
+    expect(await store.editedAt("/vault/a")).toBe(111);
+    expect(await store.editedAt("/vault/b")).toBe(222);
   });
 });
