@@ -1366,10 +1366,9 @@ bootstrapToggle.addEventListener("click", () => {
 });
 
 bootstrapDraft.addEventListener("click", async () => {
-  // The draft proposal is backref'd to the current chat, so make sure one exists.
-  if (!currentChatId) await newChat();
-  const chatId = currentChatId;
-  if (!chatId) return;
+  // App-initiated from Settings: do NOT fabricate a chat (F7). The proposal is
+  // backref'd to the SYSTEM sentinel in the main process and surfaces in the
+  // global review queue below.
   bootstrapDraft.disabled = true;
   setStatus("Drafting your profile…");
   const res = await window.secondBrain.assistantBootstrap(
@@ -1379,11 +1378,7 @@ bootstrapDraft.addEventListener("click", async () => {
       help: bootstrapHelp.value,
       goals: bootstrapGoals.value,
     },
-    {
-      model: { provider: currentProvider(), model: modelSelect.value },
-      chatId,
-      turnTs: Date.now(),
-    }
+    { model: { provider: currentProvider(), model: modelSelect.value } }
   );
   bootstrapDraft.disabled = false;
   if (res.ok && res.proposal) {
@@ -1483,13 +1478,17 @@ async function send(): Promise<void> {
       model: { provider: currentProvider(), model: modelSelect.value },
       messages: transcript,
     },
-    // chatId + turnTs let a proposal from this turn be backref'd in the store;
-    // activeNotePath (1B) tells the assistant which note is open in the editor.
+    // chatId + turnTs let a proposal from this turn be backref'd in the store.
+    // activeNotePath + the LIVE editor buffer (eng-review F3) tell the assistant
+    // which note is open and show it what's actually being typed, not the last
+    // saved version — so a brand-new or unsaved note is reflected accurately.
     {
       ground: true,
       chatId,
       turnTs,
-      ...(currentPath ? { activeNotePath: currentPath } : {}),
+      ...(currentPath
+        ? { activeNotePath: currentPath, activeNoteText: editor.value }
+        : {}),
     }
   );
 

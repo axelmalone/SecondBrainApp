@@ -124,12 +124,17 @@ export interface AiSendOptions {
   /** The timestamp of the user turn — backref stored with any proposal. */
   turnTs?: number;
   /**
-   * Absolute path of the note open in the editor this turn (1B). The main
-   * process reads it (after an isInside + .md check) and injects a bounded
-   * excerpt so the assistant knows what the user is currently looking at.
+   * Absolute path of the note open in the editor this turn (1B). Validated
+   * (isInside + .md) before its name is used to label the injected context.
    * Stateless: the renderer supplies it on every send.
    */
   activeNotePath?: string;
+  /**
+   * The LIVE editor buffer for the active note (eng-review F3). Sent alongside
+   * activeNotePath so the assistant sees what the user is actually typing —
+   * including a brand-new or unsaved note — instead of a stale on-disk read.
+   */
+  activeNoteText?: string;
 }
 
 // ---- Assistant bootstrap (Phase 1B) ----

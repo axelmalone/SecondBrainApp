@@ -30,6 +30,15 @@ export interface ProposalDraft {
   reason?: string;
 }
 
+/**
+ * Reserved backref `chatId` for proposals the APP initiates rather than a chat
+ * turn — e.g. the Settings "Set up your assistant" bootstrap (F7). Using this
+ * sentinel keeps the backref honest ("this came from the app, not a chat")
+ * instead of fabricating a throwaway chat the user never opened. It is not a
+ * real chat id and never resolves to a chat session.
+ */
+export const SYSTEM_CHAT_ID = "system";
+
 /** The success shape of a parsed turn (CQ2-A): a proposal is optional. */
 export interface ParsedTurn {
   text: string;
