@@ -8,8 +8,12 @@ import type {
   AiSendResult,
   AiSetKeyResult,
   AiStatus,
+  AssistantBootstrapForm,
+  AssistantBootstrapResult,
   ChatRequest,
   GroundingStatus,
+  ModelSpec,
+  PersonaFileStatus,
   ProviderId,
 } from "./ai.js";
 import type { ChatSession, ChatSummary, StoredMessage } from "./chat.js";
@@ -24,8 +28,11 @@ export type {
   AiSendResult,
   AiSetKeyResult,
   AiStatus,
+  AssistantBootstrapForm,
+  AssistantBootstrapResult,
   ChatRequest,
   GroundingStatus,
+  PersonaFileStatus,
 } from "./ai.js";
 export type { ChatSession, ChatSummary, StoredMessage } from "./chat.js";
 export type { AcceptanceStats, ApplyResult, StoredProposal } from "./proposal.js";
@@ -102,6 +109,19 @@ export interface SecondBrainAPI {
   aiSetKey(provider: ProviderId, key: string): Promise<AiSetKeyResult>;
   /** Send a chat request through the model gateway, optionally vault-grounded. */
   aiSend(req: ChatRequest, opts?: AiSendOptions): Promise<AiSendResult>;
+  /** The Settings persona fallback for the active vault (null if none). Used
+   *  only when no `_assistant.md` exists at the vault root. */
+  personaGet(): Promise<string | null>;
+  /** Save (or clear, when empty) the per-vault Settings persona fallback. */
+  personaSet(text: string): Promise<void>;
+  /** One-shot "Set up your assistant" bootstrap: drafts `_assistant.md` from the
+   *  form + a vault sample and proposes it through the review queue (1B). */
+  assistantBootstrap(
+    form: AssistantBootstrapForm,
+    opts: { model: ModelSpec; chatId?: string; turnTs?: number }
+  ): Promise<AssistantBootstrapResult>;
+  /** Freshness of `_assistant.md` — drives the staleness-refresh nudge (1C). */
+  personaStatus(): Promise<PersonaFileStatus>;
   /** Current grounding index state (ready / indexing / counts). */
   aiGroundingStatus(): Promise<GroundingStatus>;
   /** Re-index the vault for grounding. Triggers the local embedding model. */

@@ -832,7 +832,73 @@
       #key-input:focus {
         border-color: var(--accent);
       }
-      #key-save {
+      #key-save,
+      #persona-save {
+        border: none;
+        background: var(--accent);
+        color: #fff;
+        font: inherit;
+        font-size: 12px;
+        padding: 7px 12px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      #persona-hint {
+        font-size: 12px;
+        color: var(--text-2);
+        margin-top: 4px;
+      }
+      #persona-hint code {
+        font-family: var(--mono, monospace);
+        font-size: 11px;
+      }
+      #persona-input {
+        font: inherit;
+        font-size: 13px;
+        padding: 7px 10px;
+        border-radius: 8px;
+        border: 1px solid var(--hair);
+        background: var(--card);
+        color: var(--text);
+        outline: none;
+        resize: vertical;
+      }
+      #persona-input:focus {
+        border-color: var(--accent);
+      }
+      #bootstrap {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-top: 4px;
+        padding-top: 10px;
+        border-top: 1px solid var(--hair);
+      }
+      #bootstrap[hidden] {
+        display: none;
+      }
+      #bootstrap-hint {
+        font-size: 12px;
+        color: var(--text-2);
+      }
+      #bootstrap-hint code {
+        font-family: var(--mono, monospace);
+        font-size: 11px;
+      }
+      #bootstrap input {
+        font: inherit;
+        font-size: 13px;
+        padding: 7px 10px;
+        border-radius: 8px;
+        border: 1px solid var(--hair);
+        background: var(--card);
+        color: var(--text);
+        outline: none;
+      }
+      #bootstrap input:focus {
+        border-color: var(--accent);
+      }
+      #bootstrap-draft {
         border: none;
         background: var(--accent);
         color: #fff;
@@ -1052,6 +1118,47 @@
       .sn-src::before {
         content: "↳ ";
         color: var(--text-3);
+      }
+
+      /* staleness nudge */
+      #persona-nudge {
+        margin: 0 14px 8px;
+        padding: 8px 12px;
+        font: inherit;
+        font-size: 12px;
+        text-align: left;
+        color: var(--text);
+        background: var(--hover);
+        border: 1px solid var(--hair);
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      #persona-nudge[hidden] {
+        display: none;
+      }
+      #persona-nudge:hover {
+        border-color: var(--accent);
+      }
+
+      /* quick actions (focus one-shot) */
+      .quick-row {
+        display: flex;
+        gap: 8px;
+        padding: 0 14px 4px;
+      }
+      .quick-chip {
+        font: inherit;
+        font-size: 12px;
+        color: var(--text-2);
+        background: var(--hover);
+        border: 1px solid var(--hair);
+        border-radius: 14px;
+        padding: 5px 12px;
+        cursor: pointer;
+      }
+      .quick-chip:hover {
+        color: var(--text);
+        border-color: var(--accent);
       }
 
       /* composer */
@@ -1278,7 +1385,36 @@
             />
             <button id="key-save">Save key</button>
           </div>
+          <div id="persona-hint">
+            How your assistant should think about you. Used until an
+            <code>_assistant.md</code> exists at your vault root.
+          </div>
+          <textarea
+            id="persona-input"
+            rows="4"
+            placeholder="e.g. I'm a founder building a CRM. Help me connect notes to my goals and challenge my thinking."
+            spellcheck="false"
+          ></textarea>
+          <div class="row">
+            <button id="persona-save">Save profile</button>
+            <button id="bootstrap-toggle" class="key-btn">Set up your assistant</button>
+          </div>
+          <div id="bootstrap" hidden>
+            <div id="bootstrap-hint">
+              Answer a few questions and I'll draft an <code>_assistant.md</code>
+              for you, grounded in your vault. You review it before it's saved.
+            </div>
+            <input id="bootstrap-role" placeholder="Your role / who you are" spellcheck="false" />
+            <input id="bootstrap-projects" placeholder="What you're working on right now" spellcheck="false" />
+            <input id="bootstrap-help" placeholder="How you want the assistant to help" spellcheck="false" />
+            <input id="bootstrap-goals" placeholder="Where you're headed (goals / direction)" spellcheck="false" />
+            <div class="row">
+              <button id="bootstrap-draft">Draft my profile</button>
+            </div>
+          </div>
         </section>
+
+        <button id="persona-nudge" hidden></button>
 
         <div class="ground">
           <span class="gdot" id="ground-dot"></span>
@@ -1298,6 +1434,10 @@
           </div>
           <div class="rq-list" id="rq-list"></div>
         </section>
+
+        <div class="quick-row">
+          <button id="focus-btn" class="quick-chip">What should I focus on?</button>
+        </div>
 
         <div class="composer">
           <textarea

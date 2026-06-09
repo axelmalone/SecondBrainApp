@@ -21,6 +21,11 @@ const api: SecondBrainAPI = {
   aiStatus: () => ipcRenderer.invoke("ai:status"),
   aiSetKey: (provider, key) => ipcRenderer.invoke("ai:setKey", provider, key),
   aiSend: (req, opts) => ipcRenderer.invoke("ai:send", req, opts),
+  personaGet: () => ipcRenderer.invoke("persona:get"),
+  personaSet: (text) => ipcRenderer.invoke("persona:set", text),
+  personaStatus: () => ipcRenderer.invoke("persona:status"),
+  assistantBootstrap: (form, opts) =>
+    ipcRenderer.invoke("assistant:bootstrap", form, opts),
   aiGroundingStatus: () => ipcRenderer.invoke("ai:groundingStatus"),
   aiIndexVault: () => ipcRenderer.invoke("ai:indexVault"),
   proposalList: () => ipcRenderer.invoke("proposal:list"),
