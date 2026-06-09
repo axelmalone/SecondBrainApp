@@ -16,10 +16,14 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
-import type { AssistantBootstrapForm, ChatMessage } from "../shared/ai.js";
+import type {
+  AssistantBootstrapForm,
+  ChatMessage,
+  PersonaFileStatus,
+} from "../shared/ai.js";
 import { PROPOSE_TOOL_NAME } from "../shared/proposal.js";
 import { isInside } from "./vaultFiles.js";
-import { listMarkdownFiles, noteName } from "./vaultScan.js";
+import { listMarkdownFiles, noteName, recentMarkdown } from "./vaultScan.js";
 
 /** The persona file this app reads/writes at the vault root. */
 export const PERSONA_FILE = "_assistant.md";
@@ -61,6 +65,10 @@ export function basePersonaMessage(): ChatMessage {
       "- You don't know everything about them yet. When their notes don't cover",
       "  something, say so plainly rather than inventing detail about their life",
       "  or work.",
+      "- Treat any \"Where I'm headed\" section in their profile as their current",
+      "  direction, and weigh suggestions against it. When the conversation shows",
+      "  their goals have shifted, offer to update that section (propose the edit) —",
+      "  don't just silently rewrite it.",
     ].join("\n"),
   };
 }
@@ -267,7 +275,8 @@ export function buildBootstrapMessages(
     `Draft a concise \`${PERSONA_FILE}\` for them and propose it with the`,
     `${PROPOSE_TOOL_NAME} tool — kind "create", targetPath "${PERSONA_FILE}".`,
     "Write it in the user's own voice, in markdown, with short sections:",
-    "## Who I am, ## What I'm working on, and ## How I want help.",
+    "## Who I am, ## What I'm working on, ## How I want help, and",
+    "## Where I'm headed (their goals / direction).",
     "Ground it in their answers and the vault sample below — reflect the",
     "domains you see in their note titles. Keep it tight (under ~25 lines).",
     "Do NOT invent facts that aren't implied by the inputs; if an answer is",
@@ -279,6 +288,7 @@ export function buildBootstrapMessages(
     `- Role / who I am: ${form.role.trim() || "(not given)"}`,
     `- What I'm working on: ${form.projects.trim() || "(not given)"}`,
     `- How I want help: ${form.help.trim() || "(not given)"}`,
+    `- Where I'm headed: ${(form.goals ?? "").trim() || "(not given)"}`,
     "",
     vaultSample
       ? "A sample of my vault, by note title:\n" + vaultSample
@@ -289,4 +299,69 @@ export function buildBootstrapMessages(
     { role: "system", content: system },
     { role: "user", content: user },
   ];
+}
+
+// ---- Recent-activity context (Phase 1C) ----
+
+/** How many recently-touched note titles to surface each turn (capped). */
+export const RECENT_ACTIVITY_TITLES = 5;
+
+/**
+ * A `system` message listing the user's most-recently-modified notes, so the
+ * assistant knows where they *are*, not just who they are. Bounded to
+ * RECENT_ACTIVITY_TITLES titles (the active note, if any, is filtered out — it
+ * already rides its own fuller context message). Returns null for an empty
+ * vault or on any error — never throws.
+ */
+export async function recentActivityMessage(
+  root: string | null,
+  activeNotePath?: string,
+  limit: number = RECENT_ACTIVITY_TITLES
+): Promise<ChatMessage | null> {
+  if (!root) return null;
+  try {
+    // Over-fetch by one so filtering the active note still yields `limit`.
+    const recent = await recentMarkdown(root, limit + 1);
+    const titles = recent
+      .filter((f) => f !== activeNotePath)
+      .slice(0, limit)
+      .map((f) => noteName(f));
+    if (titles.length === 0) return null;
+    return {
+      role: "system",
+      content:
+        "The user's most recently edited notes (newest first), for a sense of " +
+        "what they're working on right now:\n" +
+        titles.map((t) => `- ${t}`).join("\n"),
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ---- Persona staleness (Phase 1C) ----
+
+/** A persona file untouched this long is "stale" — nudge a refresh. */
+export const PERSONA_STALE_DAYS = 21;
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * Freshness of `_assistant.md`: whether it exists, how many whole days since it
+ * was last modified, and whether that's past PERSONA_STALE_DAYS. `now` is
+ * injectable for tests. Never throws — a stat failure reads as "no file".
+ */
+export async function personaFileStatus(
+  root: string | null,
+  now: number = Date.now()
+): Promise<PersonaFileStatus> {
+  const absent: PersonaFileStatus = { exists: false, ageDays: 0, stale: false };
+  if (!root) return absent;
+  try {
+    const { mtimeMs } = await fs.stat(path.join(root, PERSONA_FILE));
+    const ageDays = Math.max(0, Math.floor((now - mtimeMs) / MS_PER_DAY));
+    return { exists: true, ageDays, stale: ageDays >= PERSONA_STALE_DAYS };
+  } catch {
+    return absent;
+  }
 }

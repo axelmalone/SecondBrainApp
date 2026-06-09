@@ -36,6 +36,29 @@ export function noteName(absPath: string): string {
   return path.basename(absPath, path.extname(absPath));
 }
 
+/**
+ * The `limit` most-recently-modified markdown files, newest first (1C
+ * recent-activity context). Builds on listMarkdownFiles, then stats each for
+ * its mtime — bounded by `limit` so we never inject the whole vault. Files that
+ * can't be stat'd are skipped. Returns absolute paths.
+ */
+export async function recentMarkdown(
+  root: string,
+  limit: number
+): Promise<string[]> {
+  const files = await listMarkdownFiles(root);
+  const stamped: { path: string; mtimeMs: number }[] = [];
+  for (const f of files) {
+    try {
+      stamped.push({ path: f, mtimeMs: (await fs.stat(f)).mtimeMs });
+    } catch {
+      // Skip a file that vanished between the walk and the stat.
+    }
+  }
+  stamped.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return stamped.slice(0, limit).map((s) => s.path);
+}
+
 const WIKILINK_RE = /\[\[([^\][]+)\]\]/g;
 
 /**

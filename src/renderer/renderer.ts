@@ -155,6 +155,7 @@ async function refreshVault(): Promise<void> {
   if (!info.root) showVaultModal();
   await refreshTree();
   await refreshGroundingStatus();
+  await refreshPersonaNudge();
 }
 
 async function refreshTree(): Promise<void> {
@@ -722,6 +723,8 @@ async function runApply(id: string, call: Promise<ApplyResult>): Promise<void> {
       setStatus(`Applied to ${res.appliedPath}.`);
       // If the applied note is open, reload it so the editor shows the new text.
       if (currentPath === res.appliedPath) await openNoteByPath(res.appliedPath);
+      // Applying may have written/refreshed _assistant.md → re-check staleness.
+      await refreshPersonaNudge();
       break;
     case "needs-review":
       setStatus(
@@ -835,7 +838,10 @@ const bootstrapPanel = $<HTMLDivElement>("bootstrap");
 const bootstrapRole = $<HTMLInputElement>("bootstrap-role");
 const bootstrapProjects = $<HTMLInputElement>("bootstrap-projects");
 const bootstrapHelp = $<HTMLInputElement>("bootstrap-help");
+const bootstrapGoals = $<HTMLInputElement>("bootstrap-goals");
 const bootstrapDraft = $<HTMLButtonElement>("bootstrap-draft");
+const personaNudge = $<HTMLButtonElement>("persona-nudge");
+const focusBtn = $<HTMLButtonElement>("focus-btn");
 const messagesEl = $<HTMLDivElement>("messages");
 const promptEl = $<HTMLTextAreaElement>("prompt");
 const sendBtn = $<HTMLButtonElement>("send");
@@ -1371,6 +1377,7 @@ bootstrapDraft.addEventListener("click", async () => {
       role: bootstrapRole.value,
       projects: bootstrapProjects.value,
       help: bootstrapHelp.value,
+      goals: bootstrapGoals.value,
     },
     {
       model: { provider: currentProvider(), model: modelSelect.value },
@@ -1389,6 +1396,36 @@ bootstrapDraft.addEventListener("click", async () => {
   } else {
     setStatus(`Couldn't draft your profile: ${humanError(res.error)}`);
   }
+});
+
+// Staleness-refresh nudge (1C): surface a gentle prompt when _assistant.md
+// hasn't been touched in weeks. Clicking it opens the setup form.
+async function refreshPersonaNudge(): Promise<void> {
+  const status = await window.secondBrain.personaStatus();
+  if (status.exists && status.stale) {
+    personaNudge.textContent = `Your assistant profile is ${status.ageDays} days old — refresh it so I stay current.`;
+    personaNudge.hidden = false;
+  } else {
+    personaNudge.hidden = true;
+  }
+}
+
+personaNudge.addEventListener("click", () => {
+  settingsPanel.classList.add("show");
+  bootstrapPanel.hidden = false;
+  void refreshAiStatus();
+  void refreshPersona();
+  bootstrapRole.focus();
+});
+
+// "What should I focus on?" one-shot (1C): a normal grounded turn that, thanks
+// to the persona (goals) + recent-activity + grounding context now prepended on
+// every send, reads as a short orientation. Non-agentic — just one send.
+focusBtn.addEventListener("click", () => {
+  if (sending) return;
+  promptEl.value =
+    "What should I focus on right now? Use my goals and recent notes to give a short, concrete orientation.";
+  void send();
 });
 
 keySave.addEventListener("click", async () => {
@@ -1520,3 +1557,4 @@ void refreshAiStatus();
 void refreshVault();
 void initChats();
 void refreshProposals();
+void refreshPersonaNudge();

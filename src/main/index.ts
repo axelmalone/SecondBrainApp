@@ -14,6 +14,7 @@ import {
   initAi,
   personaGet,
   personaSet,
+  personaStatus,
   reconcileGrounding,
   reindexNote,
   removeNoteFromIndex,
@@ -285,6 +286,7 @@ function registerIpc(): void {
   // vault root lives in aiSession; the renderer never supplies a path.
   ipcMain.handle("persona:get", () => personaGet());
   ipcMain.handle("persona:set", (_e, text: string) => personaSet(text));
+  ipcMain.handle("persona:status", () => personaStatus());
   ipcMain.handle(
     "assistant:bootstrap",
     (

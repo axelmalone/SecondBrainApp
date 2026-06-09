@@ -16,7 +16,9 @@ import {
   PersonaStore,
   assemblePersona,
   buildBootstrapMessages,
+  personaFileStatus,
   readActiveNoteContext,
+  recentActivityMessage,
   resolvePersonaText,
   sampleVault,
 } from "./personaContext.js";
@@ -33,6 +35,7 @@ import type {
   GroundingMeta,
   GroundingStatus,
   ModelSpec,
+  PersonaFileStatus,
   ProviderId,
 } from "../shared/ai.js";
 
@@ -157,6 +160,11 @@ export function personaGet(): Promise<string | null> {
 /** Save (or clear, when empty) the Settings persona fallback for the active vault. */
 export function personaSet(text: string): Promise<void> {
   return personaStore ? personaStore.set(currentVaultRoot, text) : Promise.resolve();
+}
+
+/** Freshness of the active vault's `_assistant.md` — drives the staleness nudge (1C). */
+export function personaStatus(): Promise<PersonaFileStatus> {
+  return personaFileStatus(currentVaultRoot);
 }
 
 /** True if the current vault has a persisted index on disk → launch can
@@ -290,7 +298,16 @@ export async function aiSend(
     currentVaultRoot,
     opts?.activeNotePath
   );
-  const contextMessages = activeNote ? [activeNote] : [];
+  // Recent-activity (1C): where the user IS, not just who they are. Capped, and
+  // the active note is excluded (it already has its own fuller context message).
+  const recentActivity = await recentActivityMessage(
+    currentVaultRoot,
+    opts?.activeNotePath
+  );
+  const contextMessages = [
+    ...(activeNote ? [activeNote] : []),
+    ...(recentActivity ? [recentActivity] : []),
+  ];
   const fullMessages = [
     proposalPolicyMessage(),
     ...personaMessages,

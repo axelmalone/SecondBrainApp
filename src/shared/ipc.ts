@@ -13,6 +13,7 @@ import type {
   ChatRequest,
   GroundingStatus,
   ModelSpec,
+  PersonaFileStatus,
   ProviderId,
 } from "./ai.js";
 import type { ChatSession, ChatSummary, StoredMessage } from "./chat.js";
@@ -31,6 +32,7 @@ export type {
   AssistantBootstrapResult,
   ChatRequest,
   GroundingStatus,
+  PersonaFileStatus,
 } from "./ai.js";
 export type { ChatSession, ChatSummary, StoredMessage } from "./chat.js";
 export type { AcceptanceStats, ApplyResult, StoredProposal } from "./proposal.js";
@@ -118,6 +120,8 @@ export interface SecondBrainAPI {
     form: AssistantBootstrapForm,
     opts: { model: ModelSpec; chatId?: string; turnTs?: number }
   ): Promise<AssistantBootstrapResult>;
+  /** Freshness of `_assistant.md` — drives the staleness-refresh nudge (1C). */
+  personaStatus(): Promise<PersonaFileStatus>;
   /** Current grounding index state (ready / indexing / counts). */
   aiGroundingStatus(): Promise<GroundingStatus>;
   /** Re-index the vault for grounding. Triggers the local embedding model. */

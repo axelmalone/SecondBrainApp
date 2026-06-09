@@ -142,6 +142,18 @@ export interface AssistantBootstrapForm {
   projects: string;
   /** How they want the assistant to help. */
   help: string;
+  /** Where they're headed — goals / direction (1C). Optional. */
+  goals?: string;
+}
+
+/** Persona-file freshness, surfaced so the UI can nudge a stale profile (1C). */
+export interface PersonaFileStatus {
+  /** True when `_assistant.md` exists at the vault root. */
+  exists: boolean;
+  /** Whole days since it was last modified (0 when it doesn't exist). */
+  ageDays: number;
+  /** True when it exists and hasn't been touched in weeks — time for a refresh. */
+  stale: boolean;
 }
 
 /**
