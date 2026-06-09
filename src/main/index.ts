@@ -9,7 +9,9 @@ import {
   aiSend,
   aiSetKey,
   aiStatus,
+  groundingHasSavedIndex,
   initAi,
+  reconcileGrounding,
   reindexNote,
   removeNoteFromIndex,
   resetGrounding,
@@ -146,16 +148,31 @@ function rebuildIndexes(root: string): void {
 }
 
 /**
- * Switch the active vault: persist the choice, point the watcher at it, and
- * reset the (vault-specific) grounding index so vectors never bleed across
- * vaults. The user re-indexes the new vault on demand.
+ * Point the grounder at `root`'s persistent index (D16). If a saved index
+ * exists, auto-reconcile in the background — reuse saved vectors, re-embed only
+ * changed notes — so grounding is ready without an explicit re-index. With no
+ * saved index (first time / new vault), do nothing: the user clicks "Index".
+ * reconcile reads the vault but never writes to it, so no watcher suppression.
+ */
+async function activateGroundingFor(root: string): Promise<void> {
+  resetGrounding(root);
+  if (await groundingHasSavedIndex()) {
+    void reconcileGrounding(root).catch(() => {});
+  }
+}
+
+/**
+ * Switch the active vault: persist the choice, point the watcher at it, rebuild
+ * the lightweight indexes, and bind grounding to this vault (auto-reconciling
+ * from its saved index if one exists). Vault-specific, so vectors never bleed
+ * across vaults.
  */
 async function setVaultRoot(root: string): Promise<void> {
   vaultRoot = root;
   await persistVaultRoot();
   startWatcher(root);
   rebuildIndexes(root);
-  resetGrounding();
+  await activateGroundingFor(root);
 }
 
 function createWindow(): void {
@@ -310,6 +327,8 @@ app.whenReady().then(async () => {
   await initAi({
     keysPath: path.join(app.getPath("userData"), "keys.enc"),
     keychainBlobPath: path.join(app.getPath("userData"), "master.key.enc"),
+    // Persisted grounding indexes (D16): app-private, OUTSIDE the vault.
+    groundingDir: path.join(app.getPath("userData"), "grounding"),
   });
 
   // Durable multi-chat store (D14): app-private, OUTSIDE the vault.
@@ -344,6 +363,9 @@ app.whenReady().then(async () => {
   if (vaultRoot) {
     startWatcher(vaultRoot);
     rebuildIndexes(vaultRoot);
+    // D16: bind grounding to this vault and auto-reconcile from its saved index
+    // (cheap — reuse unchanged vectors). No saved index → wait for the button.
+    void activateGroundingFor(vaultRoot);
   }
   setOnSaved(afterWrite);
 

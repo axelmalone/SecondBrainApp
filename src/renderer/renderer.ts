@@ -1246,13 +1246,34 @@ chatSwitchBtn.addEventListener("click", (e) => {
 //   indexing → "Indexing your vault…"           (dot off, button hidden)
 //   ready    → "Vault connected · N notes"       (dot green, button = "Re-index")
 //   first run→ first-run CTA + prominent button  (dot off, button = "Index your vault")
+let groundingPoll: ReturnType<typeof setTimeout> | null = null;
+
 async function refreshGroundingStatus(): Promise<void> {
   const s = await window.secondBrain.aiGroundingStatus();
   if (s.indexing) {
     groundDot.classList.remove("on");
-    groundState.textContent = "Indexing your vault…";
+    // Labeled progress ("sections", not a bare chunk count) for both the button
+    // index and the automatic launch reconcile.
+    if (s.total > 0) {
+      const pct = Math.round((100 * s.processed) / s.total);
+      const notes = s.notesTotal > 0 ? ` across ${s.notesTotal} notes` : "";
+      groundState.textContent = `Indexing… ${pct}% · ${s.processed}/${s.total} sections${notes}`;
+    } else {
+      groundState.textContent = "Indexing your vault…";
+    }
     indexBtn.hidden = true;
-  } else if (s.ready) {
+    // Self-poll until it finishes — covers the auto-reconcile that may start
+    // after this first call (no main→renderer push channel).
+    if (groundingPoll) clearTimeout(groundingPoll);
+    groundingPoll = setTimeout(() => void refreshGroundingStatus(), 600);
+    groundState.title = groundState.textContent ?? "";
+    return;
+  }
+  if (groundingPoll) {
+    clearTimeout(groundingPoll);
+    groundingPoll = null;
+  }
+  if (s.ready) {
     groundDot.classList.add("on");
     groundState.textContent = `Vault connected · ${s.notes} notes`;
     indexBtn.hidden = false;
@@ -1275,24 +1296,10 @@ indexBtn.addEventListener("click", async () => {
   groundDot.classList.remove("on");
   groundState.textContent = "Indexing your vault… (first run downloads the local model)";
   indexBtn.hidden = true;
-
-  // Poll for live progress while the (single round-trip) index call runs, so the
-  // status line shows "Indexing… 43% (620/1450)" instead of a silent spinner.
-  const poll = window.setInterval(() => {
-    void window.secondBrain.aiGroundingStatus().then((s) => {
-      if (s.indexing && s.total > 0) {
-        const pct = Math.round((100 * s.processed) / s.total);
-        // "sections" not a bare number — chunks are pieces of notes (~many per
-        // note), so an unlabeled count reads as a phantom note count.
-        const notes = s.notesTotal > 0 ? ` across ${s.notesTotal} notes` : "";
-        groundState.textContent = `Indexing… ${pct}% · ${s.processed}/${s.total} sections${notes}`;
-        groundState.title = groundState.textContent;
-      }
-    });
-  }, 400);
+  // refreshGroundingStatus self-polls the labeled progress while indexing runs.
+  void refreshGroundingStatus();
 
   const res = await window.secondBrain.aiIndexVault();
-  window.clearInterval(poll);
   indexBtn.disabled = false;
   if (res.ok) {
     setStatus(`Indexed ${res.notes} notes (${res.chunks} chunks).`);
