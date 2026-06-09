@@ -16,7 +16,10 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
-import type { ChatMessage } from "../shared/ai.js";
+import type { AssistantBootstrapForm, ChatMessage } from "../shared/ai.js";
+import { PROPOSE_TOOL_NAME } from "../shared/proposal.js";
+import { isInside } from "./vaultFiles.js";
+import { listMarkdownFiles, noteName } from "./vaultScan.js";
 
 /** The persona file this app reads/writes at the vault root. */
 export const PERSONA_FILE = "_assistant.md";
@@ -177,4 +180,113 @@ export async function resolvePersonaText(
   const fromFile = await readPersonaFile(root);
   if (fromFile !== null) return fromFile;
   return store ? store.get(root) : null;
+}
+
+// ---- Active-note context (Phase 1B) ----
+
+/** Cap on the active-note excerpt injected each turn (token-budget guard). */
+export const ACTIVE_NOTE_MAX_CHARS = 4000;
+
+const MD_EXT = new Set([".md", ".markdown"]);
+
+/**
+ * Build a `system` message describing the note open in the editor this turn, so
+ * the assistant knows what the user is currently looking at. Returns null (no
+ * injection) when there's no active note, the path escapes the vault, it isn't
+ * markdown, or it can't be read — never throws. The path is re-validated here
+ * even though the renderer is trusted: defense in depth on a filesystem read.
+ */
+export async function readActiveNoteContext(
+  root: string | null,
+  activeNotePath: string | undefined,
+  cap: number = ACTIVE_NOTE_MAX_CHARS
+): Promise<ChatMessage | null> {
+  if (!root || !activeNotePath) return null;
+  if (!isInside(root, activeNotePath)) return null;
+  if (!MD_EXT.has(path.extname(activeNotePath).toLowerCase())) return null;
+  try {
+    let text = await fs.readFile(activeNotePath, "utf8");
+    if (text.length > cap) text = text.slice(0, cap) + "\n\n…(note truncated)";
+    const rel = path.relative(root, activeNotePath).replace(/\\/g, "/");
+    return {
+      role: "system",
+      content:
+        `The note currently open in the user's editor is \`${rel}\`. Use it as ` +
+        "context for what they're looking at right now (it may be unsaved or " +
+        "mid-edit):\n\n---\n" +
+        text +
+        "\n---",
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ---- Bootstrap (Phase 1B) — scripted form + one vault-grounded propose turn ----
+
+/** How many note titles to sample for the grounded bootstrap draft (bounded). */
+export const BOOTSTRAP_SAMPLE_TITLES = 40;
+
+/**
+ * A bounded sample of the vault for the bootstrap draft: up to
+ * BOOTSTRAP_SAMPLE_TITLES note names (no bodies — titles alone give the model a
+ * sense of the user's domains without blowing the token budget). The persona
+ * file itself is skipped. Returns "" for an empty/unreadable vault.
+ */
+export async function sampleVault(
+  root: string | null,
+  limit: number = BOOTSTRAP_SAMPLE_TITLES
+): Promise<string> {
+  if (!root) return "";
+  let files: string[];
+  try {
+    files = await listMarkdownFiles(root);
+  } catch {
+    return "";
+  }
+  const titles = files
+    .map((f) => noteName(f))
+    .filter((n) => n.toLowerCase() !== noteName(PERSONA_FILE))
+    .slice(0, limit);
+  return titles.map((t) => `- ${t}`).join("\n");
+}
+
+/**
+ * Assemble the bootstrap turn (mechanism A): a scripted system instruction to
+ * draft `_assistant.md` and propose it via the propose tool, plus a user message
+ * carrying the form answers and the bounded vault sample. Pure (no I/O) so the
+ * prompt shape is unit-testable. The proposal rides the SAME approval queue as
+ * any edit — the user reviews + approves before anything is written.
+ */
+export function buildBootstrapMessages(
+  form: AssistantBootstrapForm,
+  vaultSample: string
+): ChatMessage[] {
+  const system = [
+    "The user is setting up their assistant profile for the first time.",
+    `Draft a concise \`${PERSONA_FILE}\` for them and propose it with the`,
+    `${PROPOSE_TOOL_NAME} tool — kind "create", targetPath "${PERSONA_FILE}".`,
+    "Write it in the user's own voice, in markdown, with short sections:",
+    "## Who I am, ## What I'm working on, and ## How I want help.",
+    "Ground it in their answers and the vault sample below — reflect the",
+    "domains you see in their note titles. Keep it tight (under ~25 lines).",
+    "Do NOT invent facts that aren't implied by the inputs; if an answer is",
+    "missing, leave a short, honest placeholder the user can fill in.",
+  ].join("\n");
+
+  const user = [
+    "Here are my answers:",
+    `- Role / who I am: ${form.role.trim() || "(not given)"}`,
+    `- What I'm working on: ${form.projects.trim() || "(not given)"}`,
+    `- How I want help: ${form.help.trim() || "(not given)"}`,
+    "",
+    vaultSample
+      ? "A sample of my vault, by note title:\n" + vaultSample
+      : "(My vault looks empty — draft from my answers alone.)",
+  ].join("\n");
+
+  return [
+    { role: "system", content: system },
+    { role: "user", content: user },
+  ];
 }

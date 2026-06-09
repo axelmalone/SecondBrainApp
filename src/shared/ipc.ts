@@ -8,8 +8,11 @@ import type {
   AiSendResult,
   AiSetKeyResult,
   AiStatus,
+  AssistantBootstrapForm,
+  AssistantBootstrapResult,
   ChatRequest,
   GroundingStatus,
+  ModelSpec,
   ProviderId,
 } from "./ai.js";
 import type { ChatSession, ChatSummary, StoredMessage } from "./chat.js";
@@ -24,6 +27,8 @@ export type {
   AiSendResult,
   AiSetKeyResult,
   AiStatus,
+  AssistantBootstrapForm,
+  AssistantBootstrapResult,
   ChatRequest,
   GroundingStatus,
 } from "./ai.js";
@@ -107,6 +112,12 @@ export interface SecondBrainAPI {
   personaGet(): Promise<string | null>;
   /** Save (or clear, when empty) the per-vault Settings persona fallback. */
   personaSet(text: string): Promise<void>;
+  /** One-shot "Set up your assistant" bootstrap: drafts `_assistant.md` from the
+   *  form + a vault sample and proposes it through the review queue (1B). */
+  assistantBootstrap(
+    form: AssistantBootstrapForm,
+    opts: { model: ModelSpec; chatId?: string; turnTs?: number }
+  ): Promise<AssistantBootstrapResult>;
   /** Current grounding index state (ready / indexing / counts). */
   aiGroundingStatus(): Promise<GroundingStatus>;
   /** Re-index the vault for grounding. Triggers the local embedding model. */

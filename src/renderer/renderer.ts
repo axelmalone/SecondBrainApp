@@ -830,6 +830,12 @@ const keyInput = $<HTMLInputElement>("key-input");
 const keySave = $<HTMLButtonElement>("key-save");
 const personaInput = $<HTMLTextAreaElement>("persona-input");
 const personaSave = $<HTMLButtonElement>("persona-save");
+const bootstrapToggle = $<HTMLButtonElement>("bootstrap-toggle");
+const bootstrapPanel = $<HTMLDivElement>("bootstrap");
+const bootstrapRole = $<HTMLInputElement>("bootstrap-role");
+const bootstrapProjects = $<HTMLInputElement>("bootstrap-projects");
+const bootstrapHelp = $<HTMLInputElement>("bootstrap-help");
+const bootstrapDraft = $<HTMLButtonElement>("bootstrap-draft");
 const messagesEl = $<HTMLDivElement>("messages");
 const promptEl = $<HTMLTextAreaElement>("prompt");
 const sendBtn = $<HTMLButtonElement>("send");
@@ -1349,6 +1355,42 @@ personaSave.addEventListener("click", async () => {
   setStatus("Saved your assistant profile.");
 });
 
+bootstrapToggle.addEventListener("click", () => {
+  bootstrapPanel.hidden = !bootstrapPanel.hidden;
+});
+
+bootstrapDraft.addEventListener("click", async () => {
+  // The draft proposal is backref'd to the current chat, so make sure one exists.
+  if (!currentChatId) await newChat();
+  const chatId = currentChatId;
+  if (!chatId) return;
+  bootstrapDraft.disabled = true;
+  setStatus("Drafting your profile…");
+  const res = await window.secondBrain.assistantBootstrap(
+    {
+      role: bootstrapRole.value,
+      projects: bootstrapProjects.value,
+      help: bootstrapHelp.value,
+    },
+    {
+      model: { provider: currentProvider(), model: modelSelect.value },
+      chatId,
+      turnTs: Date.now(),
+    }
+  );
+  bootstrapDraft.disabled = false;
+  if (res.ok && res.proposal) {
+    setStatus("Drafted your profile — review it below.");
+    bootstrapPanel.hidden = true;
+    settingsPanel.classList.remove("show");
+    await refreshProposals();
+  } else if (res.ok) {
+    setStatus("Couldn't draft a profile from those answers — try adding more detail.");
+  } else {
+    setStatus(`Couldn't draft your profile: ${humanError(res.error)}`);
+  }
+});
+
 keySave.addEventListener("click", async () => {
   const key = keyInput.value.trim();
   if (!key) return;
@@ -1404,8 +1446,14 @@ async function send(): Promise<void> {
       model: { provider: currentProvider(), model: modelSelect.value },
       messages: transcript,
     },
-    // chatId + turnTs let a proposal from this turn be backref'd in the store.
-    { ground: true, chatId, turnTs }
+    // chatId + turnTs let a proposal from this turn be backref'd in the store;
+    // activeNotePath (1B) tells the assistant which note is open in the editor.
+    {
+      ground: true,
+      chatId,
+      turnTs,
+      ...(currentPath ? { activeNotePath: currentPath } : {}),
+    }
   );
 
   hideThinking();

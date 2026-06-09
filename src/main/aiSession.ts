@@ -12,17 +12,27 @@ import { GroundingService } from "../grounding/vaultIndexer.js";
 import { ChildProcessEmbedder } from "../grounding/childEmbedder.js";
 import { IndexStore } from "../grounding/indexStore.js";
 import { ElectronKeychain } from "./keychainElectron.js";
-import { PersonaStore, assemblePersona, resolvePersonaText } from "./personaContext.js";
+import {
+  PersonaStore,
+  assemblePersona,
+  buildBootstrapMessages,
+  readActiveNoteContext,
+  resolvePersonaText,
+  sampleVault,
+} from "./personaContext.js";
 import type {
   AiIndexResult,
   AiSendOptions,
   AiSendResult,
   AiSetKeyResult,
   AiStatus,
+  AssistantBootstrapForm,
+  AssistantBootstrapResult,
   ChatMessage,
   ChatRequest,
   GroundingMeta,
   GroundingStatus,
+  ModelSpec,
   ProviderId,
 } from "../shared/ai.js";
 
@@ -273,9 +283,18 @@ export async function aiSend(
   // frames the retrieved context, not the other way round.
   const personaText = await resolvePersonaText(currentVaultRoot, personaStore);
   const personaMessages = assemblePersona(personaText);
+  // Active-note context (1B): part of the volatile recent-activity/grounding
+  // block, after the persona and before the conversation. Null when there's no
+  // open note or it fails the isInside + .md check.
+  const activeNote = await readActiveNoteContext(
+    currentVaultRoot,
+    opts?.activeNotePath
+  );
+  const contextMessages = activeNote ? [activeNote] : [];
   const fullMessages = [
     proposalPolicyMessage(),
     ...personaMessages,
+    ...contextMessages,
     ...messages,
   ];
   try {
@@ -301,6 +320,46 @@ export async function aiSend(
       : { ok: true, response: cleanResponse, grounding };
   } catch (err) {
     // The single redaction boundary: only {variant, status} crosses IPC.
+    return { ok: false, error: toSafeError(err) };
+  }
+}
+
+/**
+ * One-shot assistant bootstrap (Phase 1B, mechanism A): take the scripted form
+ * answers + a bounded vault sample and ask the model — in a SINGLE turn, no
+ * agentic loop — to draft `_assistant.md` and propose it via the propose tool.
+ * The proposal rides the normal approval queue (proposalSink → store → review),
+ * so the user reviews a diff and approves before anything is written to the
+ * vault. Errors funnel through the same toSafeError boundary as aiSend.
+ */
+export async function assistantBootstrap(
+  form: AssistantBootstrapForm,
+  opts: { model: ModelSpec; chatId?: string; turnTs?: number }
+): Promise<AssistantBootstrapResult> {
+  if (!gateway) return { ok: false, error: { variant: "AuthFailed" } };
+  if (!currentVaultRoot) return { ok: false, error: { variant: "BadResponse" } };
+  try {
+    const sample = await sampleVault(currentVaultRoot);
+    const messages: ChatMessage[] = [
+      proposalPolicyMessage(),
+      ...buildBootstrapMessages(form, sample),
+    ];
+    const { parsed } = await runProposalTurn(gateway, {
+      model: opts.model,
+      messages,
+    });
+
+    if (parsed.proposal && proposalSink && opts.chatId && opts.turnTs !== undefined) {
+      const stored = await proposalSink(parsed.proposal, {
+        chatId: opts.chatId,
+        turnTs: opts.turnTs,
+      });
+      if (stored) return { ok: true, proposal: stored };
+    }
+    // The model answered without a valid proposal (or the path check rejected
+    // it). Not an error — the user simply sees no draft to review.
+    return { ok: true };
+  } catch (err) {
     return { ok: false, error: toSafeError(err) };
   }
 }

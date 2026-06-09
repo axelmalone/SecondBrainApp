@@ -5,12 +5,17 @@ import * as os from "node:os";
 import {
   PERSONA_FILE,
   PERSONA_MAX_CHARS,
+  ACTIVE_NOTE_MAX_CHARS,
   basePersonaMessage,
   assemblePersona,
   readPersonaFile,
   resolvePersonaText,
   PersonaStore,
+  readActiveNoteContext,
+  sampleVault,
+  buildBootstrapMessages,
 } from "../src/main/personaContext.js";
+import { PROPOSE_TOOL_NAME } from "../src/shared/proposal.js";
 
 let dir: string;
 afterEach(async () => {
@@ -146,5 +151,107 @@ describe("resolvePersonaText (file wins, fallback fills in)", () => {
     const root = await tmp();
     const store = new PersonaStore(path.join(root, "persona"));
     expect(await resolvePersonaText(root, store)).toBeNull();
+  });
+});
+
+describe("readActiveNoteContext (1B)", () => {
+  it("returns null with no root or no path", async () => {
+    expect(await readActiveNoteContext(null, "/x/note.md")).toBeNull();
+    const root = await tmp();
+    expect(await readActiveNoteContext(root, undefined)).toBeNull();
+  });
+
+  it("returns null for a path outside the vault (traversal guard)", async () => {
+    const root = await tmp();
+    const outside = path.join(root, "..", "escape.md");
+    expect(await readActiveNoteContext(root, outside)).toBeNull();
+  });
+
+  it("returns null for a non-markdown file", async () => {
+    const root = await tmp();
+    const p = path.join(root, "image.png");
+    await fs.writeFile(p, "x", "utf8");
+    expect(await readActiveNoteContext(root, p)).toBeNull();
+  });
+
+  it("returns null when the file can't be read", async () => {
+    const root = await tmp();
+    expect(await readActiveNoteContext(root, path.join(root, "missing.md"))).toBeNull();
+  });
+
+  it("injects a system message naming the note and its content", async () => {
+    const root = await tmp();
+    const p = path.join(root, "Projects", "crm.md");
+    await fs.mkdir(path.dirname(p), { recursive: true });
+    await fs.writeFile(p, "# CRM\nbuild the thing", "utf8");
+    const msg = await readActiveNoteContext(root, p);
+    expect(msg?.role).toBe("system");
+    expect(msg?.content).toContain("Projects/crm.md");
+    expect(msg?.content).toContain("build the thing");
+  });
+
+  it("caps an over-long note", async () => {
+    const root = await tmp();
+    const p = path.join(root, "big.md");
+    await fs.writeFile(p, "y".repeat(ACTIVE_NOTE_MAX_CHARS + 3000), "utf8");
+    const msg = await readActiveNoteContext(root, p);
+    expect(msg?.content).toContain("…(note truncated)");
+    const run = msg!.content.match(/y+/)?.[0] ?? "";
+    expect(run.length).toBeLessThanOrEqual(ACTIVE_NOTE_MAX_CHARS);
+  });
+});
+
+describe("sampleVault (1B bootstrap sample)", () => {
+  it("returns '' for no root or an empty vault", async () => {
+    expect(await sampleVault(null)).toBe("");
+    const root = await tmp();
+    expect(await sampleVault(root)).toBe("");
+  });
+
+  it("lists note titles and skips the persona file", async () => {
+    const root = await tmp();
+    await fs.writeFile(path.join(root, "Ideas.md"), "x", "utf8");
+    await fs.writeFile(path.join(root, "Goals.md"), "x", "utf8");
+    await fs.writeFile(path.join(root, PERSONA_FILE), "x", "utf8");
+    const sample = await sampleVault(root);
+    expect(sample).toContain("- Ideas");
+    expect(sample).toContain("- Goals");
+    expect(sample).not.toContain("_assistant");
+  });
+
+  it("caps the number of titles", async () => {
+    const root = await tmp();
+    for (let i = 0; i < 10; i++) {
+      await fs.writeFile(path.join(root, `n${i}.md`), "x", "utf8");
+    }
+    const sample = await sampleVault(root, 3);
+    expect(sample.split("\n").filter((l) => l.startsWith("- "))).toHaveLength(3);
+  });
+});
+
+describe("buildBootstrapMessages (1B, mechanism A)", () => {
+  const form = { role: "Founder", projects: "a CRM", help: "challenge me" };
+
+  it("instructs a propose-tool create of the persona file", () => {
+    const msgs = buildBootstrapMessages(form, "- Ideas\n- Goals");
+    expect(msgs).toHaveLength(2);
+    expect(msgs[0]?.role).toBe("system");
+    expect(msgs[0]?.content).toContain(PROPOSE_TOOL_NAME);
+    expect(msgs[0]?.content).toContain(PERSONA_FILE);
+  });
+
+  it("carries the form answers and the vault sample in the user message", () => {
+    const msgs = buildBootstrapMessages(form, "- Ideas\n- Goals");
+    expect(msgs[1]?.role).toBe("user");
+    expect(msgs[1]?.content).toContain("Founder");
+    expect(msgs[1]?.content).toContain("a CRM");
+    expect(msgs[1]?.content).toContain("challenge me");
+    expect(msgs[1]?.content).toContain("- Ideas");
+  });
+
+  it("handles blank answers and an empty vault with honest placeholders", () => {
+    const msgs = buildBootstrapMessages({ role: "", projects: "", help: "" }, "");
+    expect(msgs[1]?.content).toContain("(not given)");
+    expect(msgs[1]?.content.toLowerCase()).toContain("empty");
   });
 });

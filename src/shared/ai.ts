@@ -123,7 +123,35 @@ export interface AiSendOptions {
   chatId?: string;
   /** The timestamp of the user turn — backref stored with any proposal. */
   turnTs?: number;
+  /**
+   * Absolute path of the note open in the editor this turn (1B). The main
+   * process reads it (after an isInside + .md check) and injects a bounded
+   * excerpt so the assistant knows what the user is currently looking at.
+   * Stateless: the renderer supplies it on every send.
+   */
+  activeNotePath?: string;
 }
+
+// ---- Assistant bootstrap (Phase 1B) ----
+
+/** The scripted setup form the user fills before the one-shot bootstrap draft. */
+export interface AssistantBootstrapForm {
+  /** Their role / who they are. */
+  role: string;
+  /** What they're currently working on. */
+  projects: string;
+  /** How they want the assistant to help. */
+  help: string;
+}
+
+/**
+ * Result of the bootstrap turn. On success the model proposed an `_assistant.md`
+ * create through the normal approval queue (the user still reviews + approves);
+ * `proposal` is absent only if the model declined to propose (rare).
+ */
+export type AssistantBootstrapResult =
+  | { ok: true; proposal?: StoredProposal }
+  | { ok: false; error: SafeError };
 
 export type AiSendResult =
   | {

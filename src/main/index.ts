@@ -9,6 +9,7 @@ import {
   aiSend,
   aiSetKey,
   aiStatus,
+  assistantBootstrap,
   groundingHasSavedIndex,
   initAi,
   personaGet,
@@ -37,7 +38,13 @@ import {
   initChats,
 } from "./chatSession.js";
 import type { ConflictResolution, VaultInfo } from "../shared/ipc.js";
-import type { AiSendOptions, ChatRequest, ProviderId } from "../shared/ai.js";
+import type {
+  AiSendOptions,
+  AssistantBootstrapForm,
+  ChatRequest,
+  ModelSpec,
+  ProviderId,
+} from "../shared/ai.js";
 import type { StoredMessage } from "../shared/chat.js";
 
 // The user's existing Obsidian vault is the default; the chosen root is
@@ -278,6 +285,14 @@ function registerIpc(): void {
   // vault root lives in aiSession; the renderer never supplies a path.
   ipcMain.handle("persona:get", () => personaGet());
   ipcMain.handle("persona:set", (_e, text: string) => personaSet(text));
+  ipcMain.handle(
+    "assistant:bootstrap",
+    (
+      _e,
+      form: AssistantBootstrapForm,
+      opts: { model: ModelSpec; chatId?: string; turnTs?: number }
+    ) => assistantBootstrap(form, opts)
+  );
 
   ipcMain.handle("ai:groundingStatus", () => aiGroundingStatus());
   ipcMain.handle("ai:indexVault", () =>
