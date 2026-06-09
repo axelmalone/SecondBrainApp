@@ -1106,6 +1106,47 @@
         color: var(--text-3);
       }
 
+      /* staleness nudge */
+      #persona-nudge {
+        margin: 0 14px 8px;
+        padding: 8px 12px;
+        font: inherit;
+        font-size: 12px;
+        text-align: left;
+        color: var(--text);
+        background: var(--hover);
+        border: 1px solid var(--hair);
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      #persona-nudge[hidden] {
+        display: none;
+      }
+      #persona-nudge:hover {
+        border-color: var(--accent);
+      }
+
+      /* quick actions (focus one-shot) */
+      .quick-row {
+        display: flex;
+        gap: 8px;
+        padding: 0 14px 4px;
+      }
+      .quick-chip {
+        font: inherit;
+        font-size: 12px;
+        color: var(--text-2);
+        background: var(--hover);
+        border: 1px solid var(--hair);
+        border-radius: 14px;
+        padding: 5px 12px;
+        cursor: pointer;
+      }
+      .quick-chip:hover {
+        color: var(--text);
+        border-color: var(--accent);
+      }
+
       /* composer */
       .composer {
         padding: 12px 14px;
@@ -1352,11 +1393,14 @@
             <input id="bootstrap-role" placeholder="Your role / who you are" spellcheck="false" />
             <input id="bootstrap-projects" placeholder="What you're working on right now" spellcheck="false" />
             <input id="bootstrap-help" placeholder="How you want the assistant to help" spellcheck="false" />
+            <input id="bootstrap-goals" placeholder="Where you're headed (goals / direction)" spellcheck="false" />
             <div class="row">
               <button id="bootstrap-draft">Draft my profile</button>
             </div>
           </div>
         </section>
+
+        <button id="persona-nudge" hidden></button>
 
         <div class="ground">
           <span class="gdot" id="ground-dot"></span>
@@ -1373,6 +1417,10 @@
           </div>
           <div class="rq-list" id="rq-list"></div>
         </section>
+
+        <div class="quick-row">
+          <button id="focus-btn" class="quick-chip">What should I focus on?</button>
+        </div>
 
         <div class="composer">
           <textarea

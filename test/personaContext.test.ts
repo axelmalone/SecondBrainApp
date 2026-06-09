@@ -14,8 +14,25 @@ import {
   readActiveNoteContext,
   sampleVault,
   buildBootstrapMessages,
+  recentActivityMessage,
+  personaFileStatus,
+  PERSONA_STALE_DAYS,
 } from "../src/main/personaContext.js";
+import { recentMarkdown } from "../src/main/vaultScan.js";
 import { PROPOSE_TOOL_NAME } from "../src/shared/proposal.js";
+
+/** Write a markdown file with an explicit mtime (days ago) for ordering tests. */
+async function writeAged(
+  root: string,
+  name: string,
+  daysAgo: number
+): Promise<string> {
+  const p = path.join(root, name);
+  await fs.writeFile(p, "x", "utf8");
+  const t = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
+  await fs.utimes(p, t, t);
+  return p;
+}
 
 let dir: string;
 afterEach(async () => {
@@ -34,6 +51,12 @@ describe("base persona", () => {
     expect(m.role).toBe("system");
     expect(m.content.length).toBeGreaterThan(50);
     expect(m.content.toLowerCase()).toContain("second brain");
+  });
+
+  it("treats a goals section as direction and offers to update it (1C)", () => {
+    const m = basePersonaMessage();
+    expect(m.content).toContain("Where I'm headed");
+    expect(m.content.toLowerCase()).toContain("offer to update");
   });
 });
 
@@ -230,22 +253,29 @@ describe("sampleVault (1B bootstrap sample)", () => {
 });
 
 describe("buildBootstrapMessages (1B, mechanism A)", () => {
-  const form = { role: "Founder", projects: "a CRM", help: "challenge me" };
+  const form = {
+    role: "Founder",
+    projects: "a CRM",
+    help: "challenge me",
+    goals: "raise a seed round",
+  };
 
-  it("instructs a propose-tool create of the persona file", () => {
+  it("instructs a propose-tool create of the persona file with a goals section", () => {
     const msgs = buildBootstrapMessages(form, "- Ideas\n- Goals");
     expect(msgs).toHaveLength(2);
     expect(msgs[0]?.role).toBe("system");
     expect(msgs[0]?.content).toContain(PROPOSE_TOOL_NAME);
     expect(msgs[0]?.content).toContain(PERSONA_FILE);
+    expect(msgs[0]?.content).toContain("Where I'm headed");
   });
 
-  it("carries the form answers and the vault sample in the user message", () => {
+  it("carries the form answers (incl. goals) and the vault sample", () => {
     const msgs = buildBootstrapMessages(form, "- Ideas\n- Goals");
     expect(msgs[1]?.role).toBe("user");
     expect(msgs[1]?.content).toContain("Founder");
     expect(msgs[1]?.content).toContain("a CRM");
     expect(msgs[1]?.content).toContain("challenge me");
+    expect(msgs[1]?.content).toContain("raise a seed round");
     expect(msgs[1]?.content).toContain("- Ideas");
   });
 
@@ -253,5 +283,70 @@ describe("buildBootstrapMessages (1B, mechanism A)", () => {
     const msgs = buildBootstrapMessages({ role: "", projects: "", help: "" }, "");
     expect(msgs[1]?.content).toContain("(not given)");
     expect(msgs[1]?.content.toLowerCase()).toContain("empty");
+  });
+});
+
+describe("recentMarkdown (1C, mtime-sorted)", () => {
+  it("returns the most recent files first, capped", async () => {
+    const root = await tmp();
+    await writeAged(root, "old.md", 30);
+    await writeAged(root, "mid.md", 10);
+    await writeAged(root, "new.md", 1);
+    const recent = await recentMarkdown(root, 2);
+    expect(recent.map((p) => path.basename(p))).toEqual(["new.md", "mid.md"]);
+  });
+});
+
+describe("recentActivityMessage (1C)", () => {
+  it("returns null for an empty vault", async () => {
+    const root = await tmp();
+    expect(await recentActivityMessage(root)).toBeNull();
+    expect(await recentActivityMessage(null)).toBeNull();
+  });
+
+  it("lists recent titles newest-first, capped, excluding the active note", async () => {
+    const root = await tmp();
+    await writeAged(root, "Old.md", 30);
+    await writeAged(root, "Mid.md", 10);
+    const active = await writeAged(root, "Active.md", 1);
+    const msg = await recentActivityMessage(root, active, 5);
+    expect(msg?.role).toBe("system");
+    expect(msg?.content).toContain("- Mid");
+    expect(msg?.content).toContain("- Old");
+    // The active note is surfaced via its own context message, not here.
+    expect(msg?.content).not.toContain("- Active");
+  });
+});
+
+describe("personaFileStatus (1C staleness)", () => {
+  it("reports absent when there's no file or root", async () => {
+    const root = await tmp();
+    expect(await personaFileStatus(null)).toEqual({
+      exists: false,
+      ageDays: 0,
+      stale: false,
+    });
+    expect(await personaFileStatus(root)).toEqual({
+      exists: false,
+      ageDays: 0,
+      stale: false,
+    });
+  });
+
+  it("a fresh file is not stale", async () => {
+    const root = await tmp();
+    await fs.writeFile(path.join(root, PERSONA_FILE), "me", "utf8");
+    const status = await personaFileStatus(root);
+    expect(status.exists).toBe(true);
+    expect(status.stale).toBe(false);
+  });
+
+  it("a weeks-old file is stale, with the age in days", async () => {
+    const root = await tmp();
+    await writeAged(root, PERSONA_FILE, PERSONA_STALE_DAYS + 5);
+    const status = await personaFileStatus(root);
+    expect(status.exists).toBe(true);
+    expect(status.stale).toBe(true);
+    expect(status.ageDays).toBeGreaterThanOrEqual(PERSONA_STALE_DAYS);
   });
 });
