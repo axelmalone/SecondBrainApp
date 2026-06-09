@@ -23,7 +23,7 @@ import type {
 } from "../shared/ai.js";
 import { PROPOSE_TOOL_NAME } from "../shared/proposal.js";
 import { isInside } from "./vaultFiles.js";
-import { listMarkdownFiles, noteName, recentMarkdown } from "./vaultScan.js";
+import { noteName, recentMarkdown } from "./vaultScan.js";
 
 /** The persona file this app reads/writes at the vault root. */
 export const PERSONA_FILE = "_assistant.md";
@@ -81,6 +81,39 @@ function normalize(text: string | null | undefined): string | null {
 }
 
 /**
+ * Slice `text` to `cap` chars, appending a labeled notice when truncated. The
+ * single truncation helper for every bounded injection (persona, active note),
+ * so the cap behavior + notice never diverge across call sites.
+ */
+export function truncate(text: string, cap: number, label: string): string {
+  return text.length > cap ? `${text.slice(0, cap)}\n\n…(${label} truncated)` : text;
+}
+
+/**
+ * The locked per-turn system-message order:
+ *   proposalPolicy → persona → active-note → recent-activity → grounding → conversation
+ * Pure + unit-tested so the contract that frames every turn can't silently drift
+ * when aiSend changes. Null/empty slots are dropped.
+ */
+export function assembleTurnMessages(parts: {
+  policy: ChatMessage;
+  persona: ChatMessage[];
+  activeNote: ChatMessage | null;
+  recentActivity: ChatMessage | null;
+  grounding: ChatMessage[];
+  conversation: ChatMessage[];
+}): ChatMessage[] {
+  return [
+    parts.policy,
+    ...parts.persona,
+    ...(parts.activeNote ? [parts.activeNote] : []),
+    ...(parts.recentActivity ? [parts.recentActivity] : []),
+    ...parts.grounding,
+    ...parts.conversation,
+  ];
+}
+
+/**
  * Assemble the persona system messages. Pure (no I/O) so the ordering + fallback
  * + cap are unit-testable in isolation. The base persona is ALWAYS first; the
  * user's own persona (already resolved from file-or-fallback by the caller) is
@@ -94,12 +127,9 @@ function normalize(text: string | null | undefined): string | null {
  */
 export function assemblePersona(personaText: string | null): ChatMessage[] {
   const messages: ChatMessage[] = [basePersonaMessage()];
-  let persona = normalize(personaText);
-  if (persona === null) return messages;
-
-  if (persona.length > PERSONA_MAX_CHARS) {
-    persona = persona.slice(0, PERSONA_MAX_CHARS) + "\n\n…(profile truncated)";
-  }
+  const normalized = normalize(personaText);
+  if (normalized === null) return messages;
+  const persona = truncate(normalized, PERSONA_MAX_CHARS, "profile");
 
   messages.push({
     role: "system",
@@ -142,9 +172,43 @@ export async function readPersonaFile(
 export class PersonaStore {
   constructor(private readonly dir: string) {}
 
+  private keyFor(root: string): string {
+    return createHash("sha256").update(root).digest("hex").slice(0, 16);
+  }
+
   private fileFor(root: string): string {
-    const key = createHash("sha256").update(root).digest("hex").slice(0, 16);
-    return path.join(this.dir, `${key}.txt`);
+    return path.join(this.dir, `${this.keyFor(root)}.txt`);
+  }
+
+  /** The per-vault "last user-approved persona edit" timestamp file (F6). */
+  private stampFor(root: string): string {
+    return path.join(this.dir, `${this.keyFor(root)}.edited`);
+  }
+
+  /**
+   * Record that the user just approved a persona edit (a queue-approved
+   * `_assistant.md` write, or a Settings-fallback save). This is the staleness
+   * signal — distinct from file mtime, which any tool (Obsidian, sync, backup)
+   * resets without the user touching their profile. `now` injectable for tests.
+   */
+  async markEdited(root: string | null, now: number = Date.now()): Promise<void> {
+    if (!root) return;
+    await fs.mkdir(this.dir, { recursive: true });
+    const file = this.stampFor(root);
+    const tmp = `${file}.tmp`;
+    await fs.writeFile(tmp, String(now), "utf8");
+    await fs.rename(tmp, file);
+  }
+
+  /** The recorded last-approved-edit timestamp for this vault, or null. */
+  async editedAt(root: string | null): Promise<number | null> {
+    if (!root) return null;
+    try {
+      const n = Number.parseInt(await fs.readFile(this.stampFor(root), "utf8"), 10);
+      return Number.isFinite(n) ? n : null;
+    } catch {
+      return null;
+    }
   }
 
   /** The saved fallback for this vault, or null if none / unreadable. */
@@ -199,35 +263,40 @@ const MD_EXT = new Set([".md", ".markdown"]);
 
 /**
  * Build a `system` message describing the note open in the editor this turn, so
- * the assistant knows what the user is currently looking at. Returns null (no
- * injection) when there's no active note, the path escapes the vault, it isn't
- * markdown, or it can't be read — never throws. The path is re-validated here
- * even though the renderer is trusted: defense in depth on a filesystem read.
+ * the assistant knows what the user is currently looking at. Uses the LIVE editor
+ * buffer the renderer sends (not a disk read), so a brand-new or unsaved note is
+ * reflected accurately — the disk-read version silently missed exactly that case.
+ *
+ * Returns null when there's no active note, the path escapes the vault, or it
+ * isn't markdown. An empty buffer (a just-created note) still injects the note
+ * NAME so the model knows the topic. Pure — the path is re-validated here even
+ * though the renderer is trusted (defense in depth before naming a vault path).
  */
-export async function readActiveNoteContext(
+export function activeNoteMessage(
   root: string | null,
   activeNotePath: string | undefined,
+  activeNoteText: string | undefined,
   cap: number = ACTIVE_NOTE_MAX_CHARS
-): Promise<ChatMessage | null> {
+): ChatMessage | null {
   if (!root || !activeNotePath) return null;
   if (!isInside(root, activeNotePath)) return null;
   if (!MD_EXT.has(path.extname(activeNotePath).toLowerCase())) return null;
-  try {
-    let text = await fs.readFile(activeNotePath, "utf8");
-    if (text.length > cap) text = text.slice(0, cap) + "\n\n…(note truncated)";
-    const rel = path.relative(root, activeNotePath).replace(/\\/g, "/");
+  const rel = path.relative(root, activeNotePath).replace(/\\/g, "/");
+  const body = (activeNoteText ?? "").trim();
+  if (body.length === 0) {
     return {
       role: "system",
-      content:
-        `The note currently open in the user's editor is \`${rel}\`. Use it as ` +
-        "context for what they're looking at right now (it may be unsaved or " +
-        "mid-edit):\n\n---\n" +
-        text +
-        "\n---",
+      content: `The note currently open in the user's editor is \`${rel}\` — it's empty or just being started.`,
     };
-  } catch {
-    return null;
   }
+  return {
+    role: "system",
+    content:
+      `The note currently open in the user's editor is \`${rel}\` (the live ` +
+      "editor contents, which may be ahead of what's saved on disk):\n\n---\n" +
+      truncate(activeNoteText!, cap, "note") +
+      "\n---",
+  };
 }
 
 // ---- Bootstrap (Phase 1B) — scripted form + one vault-grounded propose turn ----
@@ -248,7 +317,10 @@ export async function sampleVault(
   if (!root) return "";
   let files: string[];
   try {
-    files = await listMarkdownFiles(root);
+    // Recency-ordered (not filesystem walk order) so the sample reflects what the
+    // user actually works on — a sharper, more personal first draft. Over-fetch
+    // by one to absorb the persona file we filter out below.
+    files = await recentMarkdown(root, limit + 1);
   } catch {
     return "";
   }
@@ -307,36 +379,21 @@ export function buildBootstrapMessages(
 export const RECENT_ACTIVITY_TITLES = 5;
 
 /**
- * A `system` message listing the user's most-recently-modified notes, so the
- * assistant knows where they *are*, not just who they are. Bounded to
- * RECENT_ACTIVITY_TITLES titles (the active note, if any, is filtered out — it
- * already rides its own fuller context message). Returns null for an empty
- * vault or on any error — never throws.
+ * Format the recent-activity `system` message from already-resolved note titles
+ * (newest first, active note already excluded + capped by the caller). Pure so
+ * it's testable without touching the filesystem; the recency source (the
+ * watcher-fed RecentNotesCache, with a cold-start walk fallback) lives in
+ * aiSession. Returns null for an empty list.
  */
-export async function recentActivityMessage(
-  root: string | null,
-  activeNotePath?: string,
-  limit: number = RECENT_ACTIVITY_TITLES
-): Promise<ChatMessage | null> {
-  if (!root) return null;
-  try {
-    // Over-fetch by one so filtering the active note still yields `limit`.
-    const recent = await recentMarkdown(root, limit + 1);
-    const titles = recent
-      .filter((f) => f !== activeNotePath)
-      .slice(0, limit)
-      .map((f) => noteName(f));
-    if (titles.length === 0) return null;
-    return {
-      role: "system",
-      content:
-        "The user's most recently edited notes (newest first), for a sense of " +
-        "what they're working on right now:\n" +
-        titles.map((t) => `- ${t}`).join("\n"),
-    };
-  } catch {
-    return null;
-  }
+export function formatRecentActivity(titles: string[]): ChatMessage | null {
+  if (titles.length === 0) return null;
+  return {
+    role: "system",
+    content:
+      "The user's most recently edited notes (newest first), for a sense of " +
+      "what they're working on right now:\n" +
+      titles.map((t) => `- ${t}`).join("\n"),
+  };
 }
 
 // ---- Persona staleness (Phase 1C) ----
@@ -347,19 +404,26 @@ export const PERSONA_STALE_DAYS = 21;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 /**
- * Freshness of `_assistant.md`: whether it exists, how many whole days since it
- * was last modified, and whether that's past PERSONA_STALE_DAYS. `now` is
- * injectable for tests. Never throws — a stat failure reads as "no file".
+ * Freshness of `_assistant.md`: whether it exists, how many whole days since the
+ * user last *edited their profile*, and whether that's past PERSONA_STALE_DAYS.
+ *
+ * The age is measured from `editedAt` — the recorded last user-approved persona
+ * edit (F6) — when available, falling back to the file's mtime only when there's
+ * no stamp (e.g. a profile authored directly in Obsidian). mtime alone is a poor
+ * signal: any sync/backup/frontmatter-rewrite touches the file without the user
+ * editing their profile. `now` is injectable for tests. Never throws.
  */
 export async function personaFileStatus(
   root: string | null,
-  now: number = Date.now()
+  now: number = Date.now(),
+  editedAt: number | null = null
 ): Promise<PersonaFileStatus> {
   const absent: PersonaFileStatus = { exists: false, ageDays: 0, stale: false };
   if (!root) return absent;
   try {
     const { mtimeMs } = await fs.stat(path.join(root, PERSONA_FILE));
-    const ageDays = Math.max(0, Math.floor((now - mtimeMs) / MS_PER_DAY));
+    const lastEdited = editedAt ?? mtimeMs;
+    const ageDays = Math.max(0, Math.floor((now - lastEdited) / MS_PER_DAY));
     return { exists: true, ageDays, stale: ageDays >= PERSONA_STALE_DAYS };
   } catch {
     return absent;

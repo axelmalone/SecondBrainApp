@@ -5,6 +5,7 @@ import { openaiAdapter } from "../gateway/providers/openai.js";
 import { createScrubbingLogger, toSafeError } from "../gateway/redaction.js";
 import { runProposalTurn } from "../gateway/propose.js";
 import { proposalPolicyMessage } from "../gateway/proposalPrompt.js";
+import { SYSTEM_CHAT_ID } from "../shared/proposal.js";
 import type { ProposalDraft, StoredProposal } from "../shared/proposal.js";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
@@ -14,14 +15,18 @@ import { IndexStore } from "../grounding/indexStore.js";
 import { ElectronKeychain } from "./keychainElectron.js";
 import {
   PersonaStore,
+  RECENT_ACTIVITY_TITLES,
+  activeNoteMessage,
   assemblePersona,
+  assembleTurnMessages,
   buildBootstrapMessages,
+  formatRecentActivity,
   personaFileStatus,
-  readActiveNoteContext,
-  recentActivityMessage,
   resolvePersonaText,
   sampleVault,
 } from "./personaContext.js";
+import { RecentNotesCache } from "./recentNotesCache.js";
+import { noteName, recentMarkdown } from "./vaultScan.js";
 import type {
   AiIndexResult,
   AiSendOptions,
@@ -56,6 +61,9 @@ let personaStore: PersonaStore | null = null;
  * grounder binds through.
  */
 let currentVaultRoot: string | null = null;
+/** Watcher-fed most-recently-edited-notes index, so the chat path never walks +
+ *  stats the whole vault per turn (eng-review decision 6). Re-seeded per vault. */
+const recentCache = new RecentNotesCache();
 
 /** 384-dim all-MiniLM-L6-v2. */
 const EMBED_DIMENSION = 384;
@@ -72,6 +80,9 @@ function storeFor(root: string | null): IndexStore | null {
  *  the active root so the persona assembler can find this vault's _assistant.md. */
 function buildGrounder(root: string | null): void {
   currentVaultRoot = root;
+  // Seed the recency cache for this vault (the one acceptable full walk). Async,
+  // fire-and-forget: until it finishes, recentActivity falls back to a direct walk.
+  void recentCache.seed(root);
   currentStore = storeFor(root);
   try {
     grounder = new GroundingService(makeEmbedder(), {}, currentStore);
@@ -157,14 +168,25 @@ export function personaGet(): Promise<string | null> {
   return personaStore ? personaStore.get(currentVaultRoot) : Promise.resolve(null);
 }
 
-/** Save (or clear, when empty) the Settings persona fallback for the active vault. */
-export function personaSet(text: string): Promise<void> {
-  return personaStore ? personaStore.set(currentVaultRoot, text) : Promise.resolve();
+/** Save the Settings persona fallback for the active vault (clears when empty),
+ *  and stamp it as a user-approved persona edit so staleness resets (F6). */
+export async function personaSet(text: string): Promise<void> {
+  if (!personaStore) return;
+  await personaStore.set(currentVaultRoot, text);
+  await personaStore.markEdited(currentVaultRoot);
 }
 
-/** Freshness of the active vault's `_assistant.md` — drives the staleness nudge (1C). */
-export function personaStatus(): Promise<PersonaFileStatus> {
-  return personaFileStatus(currentVaultRoot);
+/** Record that the user just approved a persona edit — called when a queue-
+ *  approved write lands on `_assistant.md` (F6 staleness signal). */
+export async function markPersonaEdited(): Promise<void> {
+  if (personaStore) await personaStore.markEdited(currentVaultRoot);
+}
+
+/** Freshness of the active vault's `_assistant.md` — drives the staleness nudge.
+ *  Ages from the last user-approved edit (F6), not raw file mtime. */
+export async function personaStatus(): Promise<PersonaFileStatus> {
+  const editedAt = personaStore ? await personaStore.editedAt(currentVaultRoot) : null;
+  return personaFileStatus(currentVaultRoot, Date.now(), editedAt);
 }
 
 /** True if the current vault has a persisted index on disk → launch can
@@ -247,35 +269,58 @@ function orderedSources(
 async function applyGrounding(
   req: ChatRequest,
   opts?: AiSendOptions
-): Promise<{ messages: ChatMessage[]; grounding: GroundingMeta }> {
+): Promise<{ groundingMessages: ChatMessage[]; grounding: GroundingMeta }> {
   if (!opts?.ground) {
-    return { messages: req.messages, grounding: { grounded: false, reason: "off" } };
+    return { groundingMessages: [], grounding: { grounded: false, reason: "off" } };
   }
   if (!grounder || !grounder.status().ready) {
     return {
-      messages: req.messages,
+      groundingMessages: [],
       grounding: { grounded: false, reason: "not-indexed" },
     };
   }
   const query = lastUserMessage(req.messages);
   if (query === undefined) {
     return {
-      messages: req.messages,
+      groundingMessages: [],
       grounding: { grounded: false, reason: "no-matches" },
     };
   }
   const result = await grounder.ground(query);
   if (result.status === "grounded") {
-    const messages: ChatMessage[] = [
-      { role: "system", content: result.injected },
-      ...req.messages,
-    ];
-    return { messages, grounding: orderedSources(result.chunks) };
+    return {
+      groundingMessages: [{ role: "system", content: result.injected }],
+      grounding: orderedSources(result.chunks),
+    };
   }
   return {
-    messages: req.messages,
+    groundingMessages: [],
     grounding: { grounded: false, reason: result.reason },
   };
+}
+
+/**
+ * The recent-activity context message for this turn. Reads from the watcher-fed
+ * RecentNotesCache when it's seeded (the common case); falls back to a direct
+ * walk while the cache is still seeding (just-launched / just-switched), so the
+ * first turn never silently loses recent activity. The active note is excluded
+ * (it has its own fuller context message) using resolved-path comparison so a
+ * separator/casing/realpath difference can't slip it into both blocks.
+ */
+async function recentActivityContext(
+  activeNotePath?: string
+): Promise<ChatMessage | null> {
+  if (!currentVaultRoot) return null;
+  // Over-fetch by one so excluding the active note still yields the full cap.
+  const paths = recentCache.isSeeded
+    ? await recentCache.recent(RECENT_ACTIVITY_TITLES + 1)
+    : await recentMarkdown(currentVaultRoot, RECENT_ACTIVITY_TITLES + 1).catch(() => []);
+  const active = activeNotePath ? path.resolve(activeNotePath) : undefined;
+  const titles = paths
+    .filter((p) => path.resolve(p) !== active)
+    .slice(0, RECENT_ACTIVITY_TITLES)
+    .map((p) => noteName(p));
+  return formatRecentActivity(titles);
 }
 
 export async function aiSend(
@@ -283,37 +328,32 @@ export async function aiSend(
   opts?: AiSendOptions
 ): Promise<AiSendResult> {
   if (!gateway) return { ok: false, error: { variant: "AuthFailed" } };
-  const { messages, grounding } = await applyGrounding(req, opts);
-  // Prompt ordering (CEO plan): stable proposal policy FIRST (cache-friendly +
-  // the answer-vs-edit contract leads), then the persona (who the assistant is +
-  // the user's own profile), then the volatile grounding excerpts inside
-  // `messages`, then the conversation. Persona before grounding so identity
-  // frames the retrieved context, not the other way round.
-  const personaText = await resolvePersonaText(currentVaultRoot, personaStore);
-  const personaMessages = assemblePersona(personaText);
-  // Active-note context (1B): part of the volatile recent-activity/grounding
-  // block, after the persona and before the conversation. Null when there's no
-  // open note or it fails the isInside + .md check.
-  const activeNote = await readActiveNoteContext(
+  // The four context sources are independent I/O — gather them concurrently so
+  // their latencies don't stack on every turn (eng-review decision 6). Order is
+  // re-imposed deterministically below by assembleTurnMessages.
+  const [personaText, grounded, recentActivity] = await Promise.all([
+    resolvePersonaText(currentVaultRoot, personaStore),
+    applyGrounding(req, opts),
+    recentActivityContext(opts?.activeNotePath),
+  ]);
+  const { groundingMessages, grounding } = grounded;
+  // Active-note is pure (uses the renderer's live editor buffer, not a disk read)
+  // so it needs no await.
+  const activeNote = activeNoteMessage(
     currentVaultRoot,
-    opts?.activeNotePath
+    opts?.activeNotePath,
+    opts?.activeNoteText
   );
-  // Recent-activity (1C): where the user IS, not just who they are. Capped, and
-  // the active note is excluded (it already has its own fuller context message).
-  const recentActivity = await recentActivityMessage(
-    currentVaultRoot,
-    opts?.activeNotePath
-  );
-  const contextMessages = [
-    ...(activeNote ? [activeNote] : []),
-    ...(recentActivity ? [recentActivity] : []),
-  ];
-  const fullMessages = [
-    proposalPolicyMessage(),
-    ...personaMessages,
-    ...contextMessages,
-    ...messages,
-  ];
+  // Locked order: policy → persona → active-note → recent-activity → grounding →
+  // conversation. Pure + unit-tested so it can't silently drift (see personaContext).
+  const fullMessages = assembleTurnMessages({
+    policy: proposalPolicyMessage(),
+    persona: assemblePersona(personaText),
+    activeNote,
+    recentActivity,
+    grounding: groundingMessages,
+    conversation: req.messages,
+  });
   try {
     const { parsed, response } = await runProposalTurn(gateway, {
       ...req,
@@ -366,10 +406,13 @@ export async function assistantBootstrap(
       messages,
     });
 
-    if (parsed.proposal && proposalSink && opts.chatId && opts.turnTs !== undefined) {
+    if (parsed.proposal && proposalSink) {
+      // App-initiated (Settings) flow: backref to the SYSTEM sentinel rather than
+      // fabricating a chat the user never opened (F7). If a chat id IS supplied
+      // (launched mid-conversation), honor it.
       const stored = await proposalSink(parsed.proposal, {
-        chatId: opts.chatId,
-        turnTs: opts.turnTs,
+        chatId: opts.chatId ?? SYSTEM_CHAT_ID,
+        turnTs: opts.turnTs ?? Date.now(),
       });
       if (stored) return { ok: true, proposal: stored };
     }
@@ -420,6 +463,15 @@ export async function reindexNote(absPath: string): Promise<void> {
 export function removeNoteFromIndex(absPath: string): void {
   if (!grounder || !grounder.status().ready) return;
   grounder.removeNote(absPath);
+}
+
+/** Watcher hooks for the recency cache (separate from grounding, which gates on
+ *  a full index existing — the recency cache should track changes regardless). */
+export function recentNoteTouched(absPath: string): Promise<void> {
+  return recentCache.note(absPath);
+}
+export function recentNoteRemoved(absPath: string): void {
+  recentCache.remove(absPath);
 }
 
 /** The explicit "Index / Re-index" button. Routes through reconcile so it

@@ -12,15 +12,19 @@ import {
   assistantBootstrap,
   groundingHasSavedIndex,
   initAi,
+  markPersonaEdited,
   personaGet,
   personaSet,
   personaStatus,
   reconcileGrounding,
+  recentNoteRemoved,
+  recentNoteTouched,
   reindexNote,
   removeNoteFromIndex,
   resetGrounding,
   setProposalSink,
 } from "./aiSession.js";
+import { PERSONA_FILE } from "./personaContext.js";
 import { VaultWatcher } from "./vaultWatcher.js";
 import { listTree, isInside } from "./vaultFiles.js";
 import { ProposalStore } from "./proposalStore.js";
@@ -68,8 +72,12 @@ function afterWrite(paths: string[]): void {
   for (const p of paths) {
     watcher?.markSelfWrite(p);
     void reindexNote(p);
+    void recentNoteTouched(p);
     void linkIndex.reindexNote(p);
     void searchIndex.reindexNote(p);
+    // A queue-approved write to _assistant.md is a user-approved persona edit —
+    // stamp it so the staleness nudge resets (F6).
+    if (path.basename(p) === PERSONA_FILE) void markPersonaEdited();
   }
 }
 
@@ -135,6 +143,7 @@ function startWatcher(root: string): void {
     root,
     onChanged: (p) => {
       void reindexNote(p);
+      void recentNoteTouched(p);
       void linkIndex.reindexNote(p);
       void searchIndex.reindexNote(p);
       // Proactive staleness (4C): a note changing on disk may stale a pending
@@ -143,6 +152,7 @@ function startWatcher(root: string): void {
     },
     onRemoved: (p) => {
       removeNoteFromIndex(p);
+      recentNoteRemoved(p);
       linkIndex.removeNote(p);
       searchIndex.removeNote(p);
     },
