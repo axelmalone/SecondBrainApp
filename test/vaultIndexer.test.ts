@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { GroundingService } from "../src/grounding/vaultIndexer.js";
+import { IndexStore } from "../src/grounding/indexStore.js";
 import type { Embedder } from "../src/grounding/types.js";
 
 const DIM = 64;
@@ -76,6 +77,60 @@ describe("GroundingService.indexVault", () => {
     // Semantics preserved: retrieval still finds the right note.
     const res = await svc.ground("note number 7 content");
     expect(res.status).toBe("grounded");
+  });
+});
+
+describe("GroundingService.reconcile — persistence (D16)", () => {
+  it("reuses saved vectors for unchanged notes (no re-embedding on relaunch)", async () => {
+    vault = await makeVault({ "a.md": "alpha apple", "b.md": "beta banana" });
+    const storeFile = path.join(vault, "..", `idx-${Date.now()}.jsonl`);
+    const store = new IndexStore(storeFile);
+    try {
+      const e1 = new FakeEmbedder();
+      const svc1 = new GroundingService(e1, {}, store);
+      const first = await svc1.reconcile(vault);
+      expect(first.notes).toBe(2);
+      expect(e1.calls).toBeGreaterThan(0); // first build embeds
+
+      // "Relaunch": brand-new service + embedder, same store, nothing changed.
+      const e2 = new FakeEmbedder();
+      const svc2 = new GroundingService(e2, {}, store);
+      const second = await svc2.reconcile(vault);
+      expect(second.notes).toBe(2);
+      expect(second.chunks).toBe(first.chunks);
+      expect(e2.calls).toBe(0); // ← reused saved vectors, embedded nothing
+      expect(svc2.status().ready).toBe(true);
+      // Retrieval still works from the reused vectors.
+      expect((await svc2.ground("alpha apple")).status).toBe("grounded");
+    } finally {
+      await fs.rm(storeFile, { force: true });
+    }
+  });
+
+  it("re-embeds only changed notes and drops deleted ones", async () => {
+    vault = await makeVault({ "a.md": "alpha", "b.md": "beta", "c.md": "gamma" });
+    const storeFile = path.join(vault, "..", `idx-${Date.now()}-2.jsonl`);
+    const store = new IndexStore(storeFile);
+    try {
+      const e1 = new FakeEmbedder();
+      await new GroundingService(e1, {}, store).reconcile(vault);
+
+      // Change a.md, delete c.md, leave b.md untouched.
+      await fs.writeFile(path.join(vault, "a.md"), "alpha rewritten", "utf8");
+      await fs.rm(path.join(vault, "c.md"));
+
+      const e2 = new FakeEmbedder();
+      const svc2 = new GroundingService(e2, {}, store);
+      const res = await svc2.reconcile(vault);
+
+      expect(res.notes).toBe(2); // a.md + b.md; c.md dropped
+      expect(e2.calls).toBe(1); // only a.md re-embedded (b reused, c gone)
+      // c.md is gone from the persisted store too.
+      const saved = await store.load();
+      expect(saved.has(path.join(vault, "c.md"))).toBe(false);
+    } finally {
+      await fs.rm(storeFile, { force: true });
+    }
   });
 });
 

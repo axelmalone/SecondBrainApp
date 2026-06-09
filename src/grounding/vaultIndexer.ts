@@ -3,6 +3,9 @@ import * as path from "node:path";
 import { chunkMarkdown } from "./chunk.js";
 import { retrieve, type RetrieveOptions } from "./retrieve.js";
 import { VectorIndex } from "./vectorIndex.js";
+import { IndexStore, type StoredNote } from "./indexStore.js";
+import { readWithBaseline } from "../vault/hash.js";
+import type { DiskBaseline } from "../vault/types.js";
 import type {
   Chunk,
   Embedder,
@@ -67,7 +70,9 @@ export class GroundingService {
 
   constructor(
     private readonly embedder: Embedder,
-    private readonly options: GroundingServiceOptions = {}
+    private readonly options: GroundingServiceOptions = {},
+    /** Persists the index (D16). When null, the index is in-memory only. */
+    private readonly store: IndexStore | null = null
   ) {}
 
   status(): {
@@ -101,6 +106,108 @@ export class GroundingService {
     if (chunks.length === 0) return [];
     const vectors = await this.embedder.embed(chunks.map((c) => c.text));
     return chunks.map((c, i) => ({ ...c, vector: vectors[i] as number[] }));
+  }
+
+  /** Embed a flat chunk list in EMBED_BATCH-sized calls, advancing progress. */
+  private async embedFlat(chunks: Chunk[]): Promise<number[][]> {
+    const vectors = new Array<number[]>(chunks.length);
+    for (let i = 0; i < chunks.length; i += GroundingService.EMBED_BATCH) {
+      const slice = chunks.slice(i, i + GroundingService.EMBED_BATCH);
+      const batch = await this.embedder.embed(slice.map((c) => c.text));
+      for (let j = 0; j < slice.length; j++) vectors[i + j] = batch[j] as number[];
+      this.progress.done = Math.min(i + slice.length, chunks.length);
+    }
+    return vectors;
+  }
+
+  /**
+   * Launch / refresh path (D16). Reuses the persisted index: each note whose
+   * on-disk fingerprint is unchanged keeps its saved vectors (no embedding);
+   * only new/edited notes are re-embedded, and deleted notes are dropped. The
+   * cheap mtime+size gate means an unchanged vault is mostly stat() calls —
+   * seconds, not the full embed. Falls back to a full indexVault with no store.
+   */
+  async reconcile(root: string): Promise<IndexCounts> {
+    if (!this.store) return this.indexVault(root);
+    this.indexing = true;
+    this.progress = { done: 0, total: 0, notes: 0 };
+    try {
+      const saved = await this.store.load();
+      const files = await listMarkdown(root);
+      this.index.clear();
+      this.notePaths.clear();
+
+      const current = new Map<string, StoredNote>();
+      const toEmbed: { file: string; baseline: DiskBaseline; chunks: Chunk[] }[] = [];
+
+      for (const file of files) {
+        let stats;
+        try {
+          stats = await fs.stat(file);
+        } catch {
+          continue;
+        }
+        const cached = saved.get(file);
+        // Cheap gate: unchanged mtime+size → reuse saved vectors, no read/embed.
+        if (
+          cached &&
+          cached.baseline.mtimeMs === stats.mtimeMs &&
+          cached.baseline.size === stats.size
+        ) {
+          this.index.add(cached.chunks);
+          this.notePaths.add(file);
+          current.set(file, cached);
+          continue;
+        }
+        // mtime/size moved → read + hash to tell a real edit from a mere touch.
+        let read;
+        try {
+          read = await readWithBaseline(file);
+        } catch {
+          continue;
+        }
+        if (cached && cached.baseline.sha256 === read.baseline.sha256) {
+          const refreshed: StoredNote = {
+            path: file,
+            baseline: read.baseline,
+            chunks: cached.chunks,
+          };
+          this.index.add(cached.chunks);
+          this.notePaths.add(file);
+          current.set(file, refreshed);
+          continue;
+        }
+        const chunks = chunkMarkdown(
+          file,
+          read.content.toString("utf8"),
+          this.chunkOptions()
+        );
+        if (chunks.length > 0) toEmbed.push({ file, baseline: read.baseline, chunks });
+      }
+
+      // Embed only the new/changed notes (batched, gentle).
+      this.progress.notes = files.length;
+      const flat = toEmbed.flatMap((e) => e.chunks);
+      this.progress.total = flat.length;
+      const vectors = await this.embedFlat(flat);
+
+      let k = 0;
+      for (const e of toEmbed) {
+        const indexed: IndexedChunk[] = e.chunks.map((c) => ({
+          ...c,
+          vector: vectors[k++] as number[],
+        }));
+        this.index.add(indexed);
+        this.notePaths.add(e.file);
+        current.set(e.file, { path: e.file, baseline: e.baseline, chunks: indexed });
+      }
+
+      // Persist the exact current set (drops deleted/superseded notes too).
+      await this.store.compact(current.values());
+      return { notes: this.notePaths.size, chunks: this.index.size };
+    } finally {
+      this.indexing = false;
+    }
   }
 
   /**
@@ -139,15 +246,7 @@ export class GroundingService {
       //    batch in flight at a time — deliberately gentle on the machine.
       const flat = perNote.flatMap((n) => n.chunks);
       this.progress.total = flat.length;
-      const vectors = new Array<number[]>(flat.length);
-      for (let i = 0; i < flat.length; i += GroundingService.EMBED_BATCH) {
-        const slice = flat.slice(i, i + GroundingService.EMBED_BATCH);
-        const batch = await this.embedder.embed(slice.map((c) => c.text));
-        for (let j = 0; j < slice.length; j++) {
-          vectors[i + j] = batch[j] as number[];
-        }
-        this.progress.done = Math.min(i + slice.length, flat.length);
-      }
+      const vectors = await this.embedFlat(flat);
 
       // 3. Reattach vectors to their notes and populate the index.
       let k = 0;
@@ -173,16 +272,16 @@ export class GroundingService {
    * throws (a watcher callback must never crash the app).
    */
   async reindexNote(notePath: string): Promise<void> {
-    let md: string;
+    let read;
     try {
-      md = await fs.readFile(notePath, "utf8");
+      read = await readWithBaseline(notePath);
     } catch {
       this.removeNote(notePath);
       return;
     }
     let indexed: IndexedChunk[];
     try {
-      indexed = await this.embedChunks(notePath, md);
+      indexed = await this.embedChunks(notePath, read.content.toString("utf8"));
     } catch {
       return; // embedding failed; keep the previous chunks rather than lose them
     }
@@ -192,12 +291,17 @@ export class GroundingService {
     }
     this.index.replaceNote(notePath, indexed);
     this.notePaths.add(notePath);
+    // Persist this note so the saved index stays current as the user edits (D16).
+    await this.store?.putNote({ path: notePath, baseline: read.baseline, chunks: indexed });
   }
 
   /** Drop a note from the index (deleted/renamed-away on disk). */
   removeNote(notePath: string): void {
     this.index.replaceNote(notePath, []);
     this.notePaths.delete(notePath);
+    // Tombstone it in the persisted index (best-effort; a watcher remove must
+    // never block or throw).
+    void this.store?.deleteNote(notePath).catch(() => {});
   }
 
   /** Retrieve grounding context for a query. Never throws (D12). */

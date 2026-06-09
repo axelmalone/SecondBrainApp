@@ -7,8 +7,10 @@ import { runProposalTurn } from "../gateway/propose.js";
 import { proposalPolicyMessage } from "../gateway/proposalPrompt.js";
 import type { ProposalDraft, StoredProposal } from "../shared/proposal.js";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import { GroundingService } from "../grounding/vaultIndexer.js";
 import { ChildProcessEmbedder } from "../grounding/childEmbedder.js";
+import { IndexStore } from "../grounding/indexStore.js";
 import { ElectronKeychain } from "./keychainElectron.js";
 import type {
   AiIndexResult,
@@ -27,9 +29,31 @@ let keyStore: KeyStore | null = null;
 let gateway: ModelGateway | null = null;
 let grounder: GroundingService | null = null;
 let embedder: ChildProcessEmbedder | null = null;
+/** App-private dir holding the per-vault persisted indexes (D16). */
+let groundingDir = "";
+/** The current vault's index store (null when no vault / no dir yet). */
+let currentStore: IndexStore | null = null;
 
 /** 384-dim all-MiniLM-L6-v2. */
 const EMBED_DIMENSION = 384;
+
+/** Per-vault index file, keyed by a hash of the vault root so vaults never share
+ *  (or clobber) each other's saved vectors. Null when there's no vault/dir. */
+function storeFor(root: string | null): IndexStore | null {
+  if (!root || !groundingDir) return null;
+  const key = createHash("sha256").update(root).digest("hex").slice(0, 16);
+  return new IndexStore(path.join(groundingDir, `${key}.jsonl`));
+}
+
+/** (Re)build the grounder for `root`, wiring its persistent store. */
+function buildGrounder(root: string | null): void {
+  currentStore = storeFor(root);
+  try {
+    grounder = new GroundingService(makeEmbedder(), {}, currentStore);
+  } catch {
+    grounder = null;
+  }
+}
 
 /**
  * Build the embedder. The real model runs in a STOCK-NODE child process (via
@@ -77,8 +101,10 @@ export function setProposalSink(sink: ProposalSink): void {
 export async function initAi(opts: {
   keysPath: string;
   keychainBlobPath: string;
+  groundingDir: string;
 }): Promise<void> {
   try {
+    groundingDir = opts.groundingDir;
     const keychain = new ElectronKeychain(opts.keychainBlobPath);
     keyStore = await KeyStore.open({ path: opts.keysPath, keychain });
     const logger = createScrubbingLogger(() => keyStore?.secrets() ?? []);
@@ -88,13 +114,35 @@ export async function initAi(opts: {
       fetchImpl: (url, init) => fetch(url, init),
       logger,
     });
-    // The child embedder is cheap to construct; the model only loads in the
-    // child on first index.
-    grounder = new GroundingService(makeEmbedder());
+    // No vault is bound yet; the bootstrap calls resetGrounding(root) once the
+    // active vault is known (launch) and on every switch.
+    buildGrounder(null);
   } catch {
     keyStore = null;
     gateway = null;
     grounder = null;
+  }
+}
+
+/** True if the current vault has a persisted index on disk → launch can
+ *  auto-reconcile (cheap) instead of waiting for an explicit re-index. */
+export function groundingHasSavedIndex(): Promise<boolean> {
+  return currentStore ? currentStore.exists() : Promise.resolve(false);
+}
+
+/** Reconcile the in-memory index against the persisted one (D16): reuse saved
+ *  vectors for unchanged notes, re-embed only what changed. The launch + button
+ *  path. Wrapped like aiIndexVault so only a safe result crosses IPC. */
+export async function reconcileGrounding(root: string): Promise<AiIndexResult> {
+  if (!grounder) return { ok: false, message: "grounding is unavailable" };
+  try {
+    const { notes, chunks } = await grounder.reconcile(root);
+    return { ok: true, notes, chunks };
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : "indexing failed",
+    };
   }
 }
 
@@ -239,16 +287,13 @@ export function aiGroundingStatus(): GroundingStatus {
 }
 
 /**
- * Drop the in-memory grounding index and start fresh. Called when the user
- * switches vaults — the index is vault-specific, so stale vectors must never
- * bleed from one vault into another. The user re-indexes the new vault on demand.
+ * Rebuild the grounder for `root`, wiring that vault's persistent index store.
+ * Called at launch (once the active vault is known) and on every vault switch —
+ * the index is vault-specific, so each vault gets its own saved vectors and they
+ * never bleed across. The caller can then auto-reconcile if a saved index exists.
  */
-export function resetGrounding(): void {
-  try {
-    grounder = new GroundingService(makeEmbedder());
-  } catch {
-    grounder = null;
-  }
+export function resetGrounding(root: string | null = null): void {
+  buildGrounder(root);
 }
 
 /**
@@ -267,15 +312,9 @@ export function removeNoteFromIndex(absPath: string): void {
   grounder.removeNote(absPath);
 }
 
-export async function aiIndexVault(root: string): Promise<AiIndexResult> {
-  if (!grounder) return { ok: false, message: "grounding is unavailable" };
-  try {
-    const { notes, chunks } = await grounder.indexVault(root);
-    return { ok: true, notes, chunks };
-  } catch (err) {
-    return {
-      ok: false,
-      message: err instanceof Error ? err.message : "indexing failed",
-    };
-  }
+/** The explicit "Index / Re-index" button. Routes through reconcile so it
+ *  persists (D16): the first run is a full build + save; later runs reuse the
+ *  saved vectors and only re-embed what changed. */
+export function aiIndexVault(root: string): Promise<AiIndexResult> {
+  return reconcileGrounding(root);
 }
