@@ -102,6 +102,11 @@ export interface SecondBrainAPI {
   aiSetKey(provider: ProviderId, key: string): Promise<AiSetKeyResult>;
   /** Send a chat request through the model gateway, optionally vault-grounded. */
   aiSend(req: ChatRequest, opts?: AiSendOptions): Promise<AiSendResult>;
+  /** The Settings persona fallback for the active vault (null if none). Used
+   *  only when no `_assistant.md` exists at the vault root. */
+  personaGet(): Promise<string | null>;
+  /** Save (or clear, when empty) the per-vault Settings persona fallback. */
+  personaSet(text: string): Promise<void>;
   /** Current grounding index state (ready / indexing / counts). */
   aiGroundingStatus(): Promise<GroundingStatus>;
   /** Re-index the vault for grounding. Triggers the local embedding model. */

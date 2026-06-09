@@ -828,6 +828,8 @@ const settingsPanel = $<HTMLElement>("settings");
 const keyState = $<HTMLDivElement>("key-state");
 const keyInput = $<HTMLInputElement>("key-input");
 const keySave = $<HTMLButtonElement>("key-save");
+const personaInput = $<HTMLTextAreaElement>("persona-input");
+const personaSave = $<HTMLButtonElement>("persona-save");
 const messagesEl = $<HTMLDivElement>("messages");
 const promptEl = $<HTMLTextAreaElement>("prompt");
 const sendBtn = $<HTMLButtonElement>("send");
@@ -1327,9 +1329,24 @@ async function refreshAiStatus(): Promise<void> {
   }
 }
 
+async function refreshPersona(): Promise<void> {
+  const text = await window.secondBrain.personaGet();
+  personaInput.value = text ?? "";
+}
+
 settingsToggle.addEventListener("click", () => {
   settingsPanel.classList.toggle("show");
-  if (settingsPanel.classList.contains("show")) void refreshAiStatus();
+  if (settingsPanel.classList.contains("show")) {
+    void refreshAiStatus();
+    void refreshPersona();
+  }
+});
+
+personaSave.addEventListener("click", async () => {
+  personaSave.disabled = true;
+  await window.secondBrain.personaSet(personaInput.value);
+  personaSave.disabled = false;
+  setStatus("Saved your assistant profile.");
 });
 
 keySave.addEventListener("click", async () => {

@@ -12,6 +12,7 @@ import { GroundingService } from "../grounding/vaultIndexer.js";
 import { ChildProcessEmbedder } from "../grounding/childEmbedder.js";
 import { IndexStore } from "../grounding/indexStore.js";
 import { ElectronKeychain } from "./keychainElectron.js";
+import { PersonaStore, assemblePersona, resolvePersonaText } from "./personaContext.js";
 import type {
   AiIndexResult,
   AiSendOptions,
@@ -33,6 +34,15 @@ let embedder: ChildProcessEmbedder | null = null;
 let groundingDir = "";
 /** The current vault's index store (null when no vault / no dir yet). */
 let currentStore: IndexStore | null = null;
+/** App-private store for the per-vault Settings persona fallback (Phase 1A). */
+let personaStore: PersonaStore | null = null;
+/**
+ * The active vault root, tracked here so aiSend can read its `_assistant.md`
+ * persona without the renderer ever supplying (or being trusted with) the path.
+ * Set on launch + every vault switch via resetGrounding, the same hook the
+ * grounder binds through.
+ */
+let currentVaultRoot: string | null = null;
 
 /** 384-dim all-MiniLM-L6-v2. */
 const EMBED_DIMENSION = 384;
@@ -45,8 +55,10 @@ function storeFor(root: string | null): IndexStore | null {
   return new IndexStore(path.join(groundingDir, `${key}.jsonl`));
 }
 
-/** (Re)build the grounder for `root`, wiring its persistent store. */
+/** (Re)build the grounder for `root`, wiring its persistent store. Also records
+ *  the active root so the persona assembler can find this vault's _assistant.md. */
 function buildGrounder(root: string | null): void {
+  currentVaultRoot = root;
   currentStore = storeFor(root);
   try {
     grounder = new GroundingService(makeEmbedder(), {}, currentStore);
@@ -102,9 +114,11 @@ export async function initAi(opts: {
   keysPath: string;
   keychainBlobPath: string;
   groundingDir: string;
+  personaDir: string;
 }): Promise<void> {
   try {
     groundingDir = opts.groundingDir;
+    personaStore = new PersonaStore(opts.personaDir);
     const keychain = new ElectronKeychain(opts.keychainBlobPath);
     keyStore = await KeyStore.open({ path: opts.keysPath, keychain });
     const logger = createScrubbingLogger(() => keyStore?.secrets() ?? []);
@@ -121,7 +135,18 @@ export async function initAi(opts: {
     keyStore = null;
     gateway = null;
     grounder = null;
+    personaStore = null;
   }
+}
+
+/** The Settings persona fallback for the active vault (null if none / no vault). */
+export function personaGet(): Promise<string | null> {
+  return personaStore ? personaStore.get(currentVaultRoot) : Promise.resolve(null);
+}
+
+/** Save (or clear, when empty) the Settings persona fallback for the active vault. */
+export function personaSet(text: string): Promise<void> {
+  return personaStore ? personaStore.set(currentVaultRoot, text) : Promise.resolve();
 }
 
 /** True if the current vault has a persisted index on disk → launch can
@@ -241,9 +266,18 @@ export async function aiSend(
 ): Promise<AiSendResult> {
   if (!gateway) return { ok: false, error: { variant: "AuthFailed" } };
   const { messages, grounding } = await applyGrounding(req, opts);
-  // Prompt ordering (see proposalPrompt.ts): stable policy FIRST, then the
-  // dynamic grounding excerpts inside `messages`, then the conversation.
-  const fullMessages = [proposalPolicyMessage(), ...messages];
+  // Prompt ordering (CEO plan): stable proposal policy FIRST (cache-friendly +
+  // the answer-vs-edit contract leads), then the persona (who the assistant is +
+  // the user's own profile), then the volatile grounding excerpts inside
+  // `messages`, then the conversation. Persona before grounding so identity
+  // frames the retrieved context, not the other way round.
+  const personaText = await resolvePersonaText(currentVaultRoot, personaStore);
+  const personaMessages = assemblePersona(personaText);
+  const fullMessages = [
+    proposalPolicyMessage(),
+    ...personaMessages,
+    ...messages,
+  ];
   try {
     const { parsed, response } = await runProposalTurn(gateway, {
       ...req,

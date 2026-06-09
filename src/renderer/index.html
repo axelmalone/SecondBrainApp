@@ -818,7 +818,8 @@
       #key-input:focus {
         border-color: var(--accent);
       }
-      #key-save {
+      #key-save,
+      #persona-save {
         border: none;
         background: var(--accent);
         color: #fff;
@@ -827,6 +828,29 @@
         padding: 7px 12px;
         border-radius: 8px;
         cursor: pointer;
+      }
+      #persona-hint {
+        font-size: 12px;
+        color: var(--text-2);
+        margin-top: 4px;
+      }
+      #persona-hint code {
+        font-family: var(--mono, monospace);
+        font-size: 11px;
+      }
+      #persona-input {
+        font: inherit;
+        font-size: 13px;
+        padding: 7px 10px;
+        border-radius: 8px;
+        border: 1px solid var(--hair);
+        background: var(--card);
+        color: var(--text);
+        outline: none;
+        resize: vertical;
+      }
+      #persona-input:focus {
+        border-color: var(--accent);
       }
 
       /* grounding status line (always on — no toggle) */
@@ -1263,6 +1287,19 @@
               spellcheck="false"
             />
             <button id="key-save">Save key</button>
+          </div>
+          <div id="persona-hint">
+            How your assistant should think about you. Used until an
+            <code>_assistant.md</code> exists at your vault root.
+          </div>
+          <textarea
+            id="persona-input"
+            rows="4"
+            placeholder="e.g. I'm a founder building a CRM. Help me connect notes to my goals and challenge my thinking."
+            spellcheck="false"
+          ></textarea>
+          <div class="row">
+            <button id="persona-save">Save profile</button>
           </div>
         </section>
 

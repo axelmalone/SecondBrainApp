@@ -11,6 +11,8 @@ import {
   aiStatus,
   groundingHasSavedIndex,
   initAi,
+  personaGet,
+  personaSet,
   reconcileGrounding,
   reindexNote,
   removeNoteFromIndex,
@@ -272,6 +274,11 @@ function registerIpc(): void {
   ipcMain.handle("ai:send", (_e, req: ChatRequest, opts?: AiSendOptions) =>
     aiSend(req, opts)
   );
+  // Persona Settings fallback (Phase 1A): per-vault, app-private. The active
+  // vault root lives in aiSession; the renderer never supplies a path.
+  ipcMain.handle("persona:get", () => personaGet());
+  ipcMain.handle("persona:set", (_e, text: string) => personaSet(text));
+
   ipcMain.handle("ai:groundingStatus", () => aiGroundingStatus());
   ipcMain.handle("ai:indexVault", () =>
     vaultRoot
@@ -329,6 +336,8 @@ app.whenReady().then(async () => {
     keychainBlobPath: path.join(app.getPath("userData"), "master.key.enc"),
     // Persisted grounding indexes (D16): app-private, OUTSIDE the vault.
     groundingDir: path.join(app.getPath("userData"), "grounding"),
+    // Per-vault Settings persona fallback (1A): app-private, OUTSIDE the vault.
+    personaDir: path.join(app.getPath("userData"), "persona"),
   });
 
   // Durable multi-chat store (D14): app-private, OUTSIDE the vault.
