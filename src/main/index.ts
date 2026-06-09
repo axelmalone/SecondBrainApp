@@ -9,14 +9,22 @@ import {
   aiSend,
   aiSetKey,
   aiStatus,
+  assistantBootstrap,
   groundingHasSavedIndex,
   initAi,
+  markPersonaEdited,
+  personaGet,
+  personaSet,
+  personaStatus,
   reconcileGrounding,
+  recentNoteRemoved,
+  recentNoteTouched,
   reindexNote,
   removeNoteFromIndex,
   resetGrounding,
   setProposalSink,
 } from "./aiSession.js";
+import { PERSONA_FILE } from "./personaContext.js";
 import { VaultWatcher } from "./vaultWatcher.js";
 import { listTree, isInside } from "./vaultFiles.js";
 import { ProposalStore } from "./proposalStore.js";
@@ -35,7 +43,13 @@ import {
   initChats,
 } from "./chatSession.js";
 import type { ConflictResolution, VaultInfo } from "../shared/ipc.js";
-import type { AiSendOptions, ChatRequest, ProviderId } from "../shared/ai.js";
+import type {
+  AiSendOptions,
+  AssistantBootstrapForm,
+  ChatRequest,
+  ModelSpec,
+  ProviderId,
+} from "../shared/ai.js";
 import type { StoredMessage } from "../shared/chat.js";
 
 // The user's existing Obsidian vault is the default; the chosen root is
@@ -58,8 +72,12 @@ function afterWrite(paths: string[]): void {
   for (const p of paths) {
     watcher?.markSelfWrite(p);
     void reindexNote(p);
+    void recentNoteTouched(p);
     void linkIndex.reindexNote(p);
     void searchIndex.reindexNote(p);
+    // A queue-approved write to _assistant.md is a user-approved persona edit —
+    // stamp it so the staleness nudge resets (F6).
+    if (path.basename(p) === PERSONA_FILE) void markPersonaEdited();
   }
 }
 
@@ -125,6 +143,7 @@ function startWatcher(root: string): void {
     root,
     onChanged: (p) => {
       void reindexNote(p);
+      void recentNoteTouched(p);
       void linkIndex.reindexNote(p);
       void searchIndex.reindexNote(p);
       // Proactive staleness (4C): a note changing on disk may stale a pending
@@ -133,6 +152,7 @@ function startWatcher(root: string): void {
     },
     onRemoved: (p) => {
       removeNoteFromIndex(p);
+      recentNoteRemoved(p);
       linkIndex.removeNote(p);
       searchIndex.removeNote(p);
     },
@@ -272,6 +292,20 @@ function registerIpc(): void {
   ipcMain.handle("ai:send", (_e, req: ChatRequest, opts?: AiSendOptions) =>
     aiSend(req, opts)
   );
+  // Persona Settings fallback (Phase 1A): per-vault, app-private. The active
+  // vault root lives in aiSession; the renderer never supplies a path.
+  ipcMain.handle("persona:get", () => personaGet());
+  ipcMain.handle("persona:set", (_e, text: string) => personaSet(text));
+  ipcMain.handle("persona:status", () => personaStatus());
+  ipcMain.handle(
+    "assistant:bootstrap",
+    (
+      _e,
+      form: AssistantBootstrapForm,
+      opts: { model: ModelSpec; chatId?: string; turnTs?: number }
+    ) => assistantBootstrap(form, opts)
+  );
+
   ipcMain.handle("ai:groundingStatus", () => aiGroundingStatus());
   ipcMain.handle("ai:indexVault", () =>
     vaultRoot
@@ -329,6 +363,8 @@ app.whenReady().then(async () => {
     keychainBlobPath: path.join(app.getPath("userData"), "master.key.enc"),
     // Persisted grounding indexes (D16): app-private, OUTSIDE the vault.
     groundingDir: path.join(app.getPath("userData"), "grounding"),
+    // Per-vault Settings persona fallback (1A): app-private, OUTSIDE the vault.
+    personaDir: path.join(app.getPath("userData"), "persona"),
   });
 
   // Durable multi-chat store (D14): app-private, OUTSIDE the vault.
