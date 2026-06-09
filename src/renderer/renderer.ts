@@ -10,11 +10,16 @@ import type {
   ChatMessage,
   GroundingMeta,
   GroundingSource,
-  GroundingUnavailableReason,
   ProviderId,
   SafeError,
 } from "../shared/ai.js";
 import type { ChatSummary } from "../shared/chat.js";
+import {
+  UNGROUNDED_REASON,
+  noteName,
+  uniqueNoteNames,
+  groundingAnnouncement,
+} from "./groundingText.js";
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -843,6 +848,7 @@ const bootstrapDraft = $<HTMLButtonElement>("bootstrap-draft");
 const personaNudge = $<HTMLButtonElement>("persona-nudge");
 const focusBtn = $<HTMLButtonElement>("focus-btn");
 const messagesEl = $<HTMLDivElement>("messages");
+const srAnnounceEl = $<HTMLDivElement>("sr-announce");
 const promptEl = $<HTMLTextAreaElement>("prompt");
 const sendBtn = $<HTMLButtonElement>("send");
 const indexBtn = $<HTMLButtonElement>("index-btn");
@@ -940,13 +946,7 @@ function humanError(err: SafeError): string {
 // D12: every answer carries a visible grounding badge — green when it used
 // vault context, amber ("answering without vault context") when it did not,
 // so the user is never fooled into thinking an answer reflects their notes.
-const UNGROUNDED_REASON: Record<GroundingUnavailableReason, string> = {
-  off: "grounding off",
-  "not-indexed": "vault not indexed yet",
-  "empty-index": "no notes indexed",
-  "embed-failed": "vault search failed",
-  "no-matches": "no relevant notes found",
-};
+// Wording lives in groundingText.ts (pure, unit-tested).
 
 function makeBadge(grounding: GroundingMeta): HTMLSpanElement {
   const badge = document.createElement("span");
@@ -961,6 +961,14 @@ function makeBadge(grounding: GroundingMeta): HTMLSpanElement {
   return badge;
 }
 
+// D12 (a11y): announce the grounding state of each answer to screen readers via
+// the polite #sr-announce live region. A blind user silently receiving an
+// ungrounded answer is the exact D12 trust failure — the visual badge alone
+// would not reach them. Mirrors makeBadge's wording in spoken form.
+function announceGrounding(grounding: GroundingMeta): void {
+  srAnnounceEl.textContent = groundingAnnouncement(grounding);
+}
+
 // ---------------------------------------------------------------------------
 // Provenance sidenotes. A grounded answer cites its sources inline with [n]
 // markers (see buildContext). We render each [n] as a clickable superscript and
@@ -971,23 +979,7 @@ function makeBadge(grounding: GroundingMeta): HTMLSpanElement {
 
 const CITE_RE = /\[(\d+)\]/g;
 
-/** A note's display name: the filename without the .md extension. */
-function noteName(notePath: string): string {
-  const base = notePath.split("/").pop() ?? notePath;
-  return base.replace(/\.(md|markdown)$/i, "");
-}
-
-/** Unique note display names, preserving first-seen order. */
-function uniqueNoteNames(sources: readonly GroundingSource[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const s of sources) {
-    if (seen.has(s.notePath)) continue;
-    seen.add(s.notePath);
-    out.push(noteName(s.notePath));
-  }
-  return out;
-}
+// noteName + uniqueNoteNames now live in groundingText.ts (pure, unit-tested).
 
 /** A clickable sidenote row: number chip + source name → opens the note. */
 function makeSidenote(n: number, source: GroundingSource): HTMLButtonElement {
@@ -1104,6 +1096,8 @@ function appendMessage(
     el.textContent = text;
     if (g) el.appendChild(makeBadge(g));
   }
+  // D12 (a11y): voice the grounding state for screen readers on every answer.
+  if (role === "assistant" && g) announceGrounding(g);
   if (extras?.usage) {
     const u = document.createElement("span");
     u.className = "usage";

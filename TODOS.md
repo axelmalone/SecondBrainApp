@@ -145,8 +145,16 @@
 - **Effort:** M (human) / S (CC). **Priority:** P1.5 (first post-M1 feature).
   **Depends on:** M1 shipping and daily-driving; a chosen TTS provider; the gateway
   typed-error contract (TTS errors must fail soft through the same boundary).
+- **Sub-item (design, from /plan-design-review 2026-06-09): persistent pause affordance.**
+  Design decision: audio keeps playing across new sends / chat switches / note switches
+  (does NOT auto-stop). Consequence: build a small always-reachable playing indicator so
+  the user can pause/stop after navigating away from the originating answer — otherwise
+  the audio is orphaned and un-pausable. See "Design decisions → Responsive & a11y".
 
-### Persistent disk-backed grounding index + launch reconcile (D16, 2026-06-08)
+### Persistent disk-backed grounding index + launch reconcile (D16, 2026-06-08) — ✅ SHIPPED 2026-06-09 (commit d11606a, #10)
+- **STATUS: DONE.** Implemented in `src/grounding/indexStore.ts` + launch reconcile. The
+  only open follow-on is the *silent-when-trivial* status display (see "Design decisions →
+  Resolved ambiguities"). Original spec retained below for history.
 - **What:** Persist the grounding vector index to an app-private file (OUTSIDE the vault,
   like the chat store) so it survives quit instead of living in memory only. On launch, do a
   CHEAP reconcile — compare each note's mtime/size/hash against the saved index and re-embed
@@ -290,6 +298,19 @@
 - **Effort:** M (human) / S (CC). **Priority:** P1.5. **Depends on:** lands with/before
   Phase 2 and before any external-ingest feature.
 
+### Prompt-cache the stable system prefix (from /plan-eng-review 2026-06-09)
+- **What:** Add Anthropic `cache_control` support to the gateway so the stable prefix
+  (`proposalPolicyMessage` + persona + goals) is cached rather than re-billed every turn.
+- **Why:** With always-on grounding + the persona system, that prefix is identical across
+  turns and is sent every message — recurring token cost + latency. The message order is
+  already structured so the stable prefix is contiguous (eng-review ARCH-4), so this is a
+  clean drop-in once persona ships.
+- **Cons / context:** The gateway is provider-agnostic and has no cache_control path today;
+  OpenAI caches automatically, Anthropic needs explicit markers — so it's Anthropic-adapter
+  work behind the shared contract. Not a correctness issue; pure optimization.
+- **Effort:** S (human) / S (CC). **Priority:** P1.5 follow-up. **Depends on:** persona
+  Phase 1 landing (defines the stable prefix).
+
 ### Grounding × persona token budget
 - **What:** Persona + goals + recent-activity context + always-on grounding all prepend
   every turn. Set sane caps in Phase 1 (e.g. ~5 recent titles, bounded sample) and revisit
@@ -306,3 +327,246 @@
   across turns (the volatile active-note/recent/grounding blocks should stay after it).
 - **Effort:** S (human) / S (CC). **Priority:** P1.5. **Depends on:** Phase 1 persona +
   recent-activity context.
+
+## Design decisions (from /plan-design-review 2026-06-09)
+
+> Design spec for the UI-bearing features above. Calibrated against DESIGN.md
+> ("The Annotated Brain" — Fraunces + Geist + Geist Mono, single evergreen accent,
+> flat editorial, provenance-as-hero, the AI annotates the manuscript and is NEVER a
+> guest chatbot). Approved wireframes: `~/.gstack/projects/axelmalone-SecondBrainApp/
+> designs/assistant-features-20260609/wireframes.html`. These are the missing
+> user-facing decisions; the eng-review locks the architecture.
+
+### Information architecture (Pass 1)
+- **Bootstrap entry = quiet opt-in.** First run shows a single calm CTA line in the AI
+  margin — `Teach me who you are →` (Fraunces voice, evergreen). NO auto-wizard on
+  launch (forcing onboarding fights the "calm enough to trust your brain" mood and
+  depletes goodwill for the Obsidian power-user). The user opts in; the line persists
+  (quietly) until a persona exists.
+- **"What should I focus on?" = suggestion chip.** Lives as a quiet chip above the
+  composer, shown on an empty/new chat session only. Not a persistent button competing
+  with the composer; discoverable when the chat is empty, out of the way once typing.
+- **Identity chip = persistent, top of AI margin.** `Your second brain · knows you ·
+  edit` sits above `#messages`, every session — it makes the moat ("the AI knows MY
+  notes") visible, consistent with DESIGN.md promoting provenance/identity from a
+  hidden status line to a signature element. `edit` opens `_assistant.md` in the editor.
+- **Margin reading order (locked):** identity chip → messages → review-queue →
+  ground-status line → composer (with the focus chip surfacing above the composer on
+  empty chats).
+
+### Interaction states (Pass 2)
+- **Bootstrap states.** LOADING: "reading a few notes…" while it samples the vault.
+  EMPTY (no/empty/unset vault): run with base questions only, drop the "I read your
+  notes" provenance line — never block or error on missing vault (CEO-plan empty-state
+  rule). ERROR (model fails mid-Q&A): keep the answers already given, offer an inline
+  retry, do not lose progress. SUCCESS: drafts `_assistant.md` into the review queue.
+- **Focus one-shot empty state (brand-new user, no goals + no recent notes):** becomes
+  the warm on-ramp — `I don't know your goals yet — teach me who you are?` linking into
+  bootstrap. Never a dead-end "no data" message.
+- **TTS latency:** clicking Listen → the play glyph shows a brief evergreen loading
+  shimmer (micro motion, 50–100ms feel), then flips to the playing state. No jarring
+  spinner. ERROR fails soft inline in ember (`Couldn't play audio · retry`) — never a
+  crash or toast (D8 contract).
+- **Goals update offer (user-initiated — revised by eng review T-1):** there is NO
+  automatic goals-shift detection (it's a fuzzy model judgment that needs an eval and
+  misfires). The update path is user-initiated: the focus one-shot can suggest updating
+  goals, and an explicit "update my goals" action drafts a `propose_note_edit` against
+  `_assistant.goals.md` into the review queue. No silent writes; human-approved;
+  deterministic + testable. (Supersedes the earlier "offers when it hears goals shift.")
+
+### User journey / emotional arc (Pass 3)
+- **Payoff moment (right after the user approves `_assistant.md`):** the assistant
+  replies with a short "Here's what I understand about you now" reflection (Fraunces
+  voice, 2–3 sentences mirroring their goals back), then offers the "What should I
+  focus on?" one-shot. This is the "it gets me" beat — never close the bootstrap
+  silently and waste the emotional peak (Norman's reflective level).
+- **Staleness re-engagement:** when `_assistant.md` is weeks old, show ONE quiet,
+  dismissable line near the identity chip — `We last talked N weeks ago — refresh?` —
+  shown once, not recurring. A repeating prompt nags and depletes the goodwill reservoir
+  for the Obsidian power-user.
+- **Bootstrap tone:** the Q&A reads as a conversation, not a form — one Fraunces question
+  at a time, warm and specific, vault-grounded where possible. No progress bar; the mono
+  "N of 4" step indicator is the only progress signal.
+
+### Anti-slop / specificity (Pass 4)
+- **Identity chip: NO avatar circle.** Drop the monogram-in-circle (the "initials in a
+  colored circle" slop pattern DESIGN.md bans). The chip is the name in Geist + a small
+  evergreen `--accent` dot signalling the "knows you" state. Flat-editorial, no fill.
+- **State motifs must carry meaning, never decorate:** the TTS waveform and the tool-trail
+  dots are allowed because they encode playback/step state; mark them `aria-hidden` and
+  never add purely ornamental versions. No floating blobs, no gradient buttons, no
+  centered-everything, no 3-column grids anywhere in these surfaces.
+
+### Design-system alignment (Pass 5)
+- **Bootstrap renders in-stream, NOT as a takeover.** The Q&A is conversational turns in
+  `#messages` (reuse the chat-message component), one Fraunces question per turn. No
+  modal wizard — the persona literally *is* a chat; a full-margin takeover would read as
+  off-brand SaaS onboarding.
+- **Token map (reuse, don't invent):** bootstrap question = Fraunces 22–23px / Geist
+  input with `--hair` border + `--card` fill; step indicator + kickers + note names +
+  tool-trail labels = Geist Mono (letter-spacing .13em on kickers); identity chip + focus
+  chip = existing `--teal-soft` pill + `--hair` border; TTS glyphs = unicode (▶ ❚❚)
+  matching the app's `☰ ⋯ + ↑ ×` convention, not a new icon set; every accent = single
+  `--accent` evergreen (`#0f6e5a` light / `#15795f` dark).
+- **Tool-trail = provenance language.** The Phase-2 step rail reuses the sidenote/source
+  visual vocabulary (hairline rail, evergreen markers, mono source chips) so exploring
+  the vault looks like the same "shows its sources" motif, not a separate console.
+
+### Responsive & accessibility (Pass 6)
+- **Keyboard:** bootstrap input reuses the composer model — Enter submits, Shift+Enter
+  newline — and auto-focuses when a new question turn appears. All new controls are
+  tab-reachable in reading order.
+- **TTS playback persists across navigation (user choice).** Audio keeps playing through
+  new sends, chat switches, and note switches until it finishes or is paused. CONSEQUENCE
+  (must build): a small persistent playback affordance so the user can still pause/stop
+  after navigating away from the originating answer — e.g. a quiet playing-indicator that
+  stays reachable while audio plays. Without it, audio becomes un-pausable orphaned sound.
+- **D12 badge is announced to screen readers:** a polite `aria-live` region voices the
+  grounded/ungrounded state per answer. A blind user silently receiving an ungrounded
+  answer is the exact D12 trust failure for non-sighted users — close it here.
+- **Screen-reader labels:** TTS glyphs/chips get `aria-label`s, the waveform is
+  `aria-hidden`. Touch targets ≥44px (extends the open FINDING-004 debt to the new
+  controls). The AI margin keeps a min-width so bootstrap/one-shot/TTS don't crush on
+  pane resize.
+
+### Resolved ambiguities (Pass 7)
+- **D16 launch reconcile = silent-when-trivial.** On launch, re-embedding only changed
+  notes stays silent when the change-set is small/fast; the ground-status line shows
+  `syncing N changed notes` only when there's meaningful work; never blocks the UI. The
+  goal is grounding that "feels automatic" — a launch flash every time undercuts that.
+- **Phase-2 tool trail = collapsed-by-default.** Shows a one-line summary ("Worked
+  through 3 steps") that expands to the full hairline rail. Honors the "shows its
+  sources" moat without turning the calm margin into a console. (Phase 2; intent locked.)
+
+### Already built — design-complete, polish only
+- **D12 visible-fail badge is implemented** (`makeBadge()` in renderer.ts → `grounded ·
+  <notes>` / `answering without vault context (<reason>)`). No net-new design needed; the
+  only deltas from this review are the `aria-live` announcement (Pass 6) and keeping the
+  wording calm. The `.review-queue`, provenance sidenotes, and `#ground-dot/#ground-state/
+  #index-btn` status line also already exist and are reused, not rebuilt.
+
+### NOT in scope (explicitly deferred)
+- **TTS voice / speed / provider-picker controls** — deferred to the TTS build (D8); this
+  review covers placement, the three playback states, and the persist-across-nav pause
+  affordance only.
+- **Phase-2 `@`-mention context handles** and the full tool-loop chrome — Phase 2, gets
+  its own /plan-eng-review.
+- **Multi-persona / per-vault personas** — out of scope; one `_assistant.md` per vault.
+
+## Engineering plan (from /plan-eng-review 2026-06-09)
+
+> Architecture decisions for personable-assistant Phase 1 (built as ONE PR per the
+> scope call). TTS (D8) is a SEPARATE PR, out of scope here. Verified against current
+> code: tool-use + proposal write-back queue already exist and are reused; D16 is
+> already shipped (commit d11606a) — only its silent-when-trivial status display is new.
+
+### Architecture
+- **Bootstrap = client-orchestrated, NOT model-sequenced.** main/renderer owns the fixed
+  question sequence, collects answers, then makes ONE drafting gateway call that emits a
+  `propose_note_edit` for `_assistant.md`. Deterministic + unit-testable; the model never
+  controls sequencing. Vault-grounded "sharper questions" = seed the script from a single
+  vault sample (one retrieval, not a loop). Reuses `propose.ts` + `parseProposal` + the
+  crash-safe proposal queue.
+- **Goals live in their OWN small file (e.g. `_assistant.goals.md`), NOT a section of
+  `_assistant.md`.** Reason (overrides the CEO-plan "one file" call): `propose_note_edit`
+  `update` replaces the FULL note text (proposal.ts:122) — a goals-section update would
+  regenerate all of `_assistant.md` and the model could silently reword the persona prose
+  (the app's highest-trust-cost surface). A tiny separate goals file makes partial updates
+  safe by construction. Both files inject into the persona context; the identity-chip
+  `edit` opens `_assistant.md`, a separate affordance edits goals. (Outside-voice T-3 noted
+  `append` exists for delta writes, but `append` can only ADD, not safely REWRITE existing
+  goals — the rewrite case is the risky one — so the split stands; rationale refined.)
+- **Persona re-read lifecycle (corrected by outside-voice T-1):** read `_assistant.md` +
+  `_assistant.goals.md` at session start; refresh on the `vaultWatcher` change event for
+  EXTERNAL (Obsidian) edits. CRITICAL: `vaultWatcher` swallows the app's own writes via
+  `markSelfWrite` (vaultWatcher.ts:90-99), so approving the bootstrap/goals edit through
+  the review queue does NOT fire the watcher — therefore ALSO trigger an explicit persona
+  re-read after any proposal-apply whose target is a persona file. Without this, the persona
+  the user just approved stays stale until next session.
+- **Central context-assembly module + token budget.** One module assembles the prepended
+  context and enforces a single total budget, truncating lowest-priority first. Priority
+  (corrected by outside-voice T-2 to protect the moat):
+  `policy > persona > goals > grounding > active-note > recent-activity`. Grounding ("knows
+  my notes") is the differentiator, so it is shed AFTER the conveniences (recent-activity,
+  active-note), never first. This is the only place that can guarantee the context window
+  isn't blown. Message order: `proposalPolicyMessage → persona/goals (stable, cache-friendly)
+  → grounding/active-note/recent-activity (volatile) → conversation` (slots into
+  aiSession.ts:246).
+
+### Code quality
+- **Recent-activity = extend `vaultScan`** with `recentlyTouched(root, n)` returning
+  mtime-sorted notes. Do NOT add a parallel directory walker (DRY).
+- **Drop the Settings persona-fallback field** (overrides CEO plan). The base persona
+  message (no-file empty state) + bootstrap + editing `_assistant.md` in the editor are
+  enough; a fourth source adds a needless "which wins?" precedence question.
+- **Persona builder mirrors `proposalPolicyMessage()`:** a `personaMessage()` (and
+  `goalsMessage()`/`recentActivityMessage()`) builder returning `ChatMessage`, for
+  consistency with the existing prompt-assembly pattern.
+- **Error handling (explicit):** missing `_assistant.md`/`_assistant.goals.md` (ENOENT) →
+  fall back to the base persona message, never throw; malformed/oversized file → use it up
+  to the byte cap, log, never block the turn (CEO empty-state rule).
+
+### Tests (Vitest; pure-Node modules stay Electron-free so they're headlessly testable)
+- **Unit:** `readPersona` (ENOENT→base, malformed/oversized→cap, happy→builder);
+  `personaMessage`/`goalsMessage`/`recentActivityMessage` shape; `assembleContext` budget
+  (all-fits, over-budget truncates lowest-priority first, nothing-present→policy only);
+  `vaultScan.recentlyTouched` (empty, fewer-than-n, mtime order, skips dot-dirs); bootstrap
+  state machine (sequence, abandon mid-flow, empty/no-vault→base questions, model error
+  mid-Q&A→keep answers + retry).
+- **E2E:** first-run bootstrap (CTA→4 Qs→approve→payoff→focus one-shot); goals update
+  (explicit action→offer→approve→`_assistant.goals.md` updated); persona re-read on external
+  edit (vaultWatcher→refresh).
+- **Eval:** bootstrap draft quality (answers→sensible `_assistant.md`); the validation-gate
+  question "does the injected persona make answers feel like it knows me" (qualitative).
+- **DONE this PR:** `announceGrounding` extracted to pure `src/renderer/groundingText.ts` +
+  `test/groundingText.test.ts` (5 tests: grounded note-naming, singular/plural, generic
+  fallback, every ungrounded reason spoken, dedupe). 198 tests green.
+
+### Performance
+- **Recent-activity is cached**, refreshed at session start + on the `vaultWatcher` change
+  event (same lifecycle as the persona re-read). No per-turn vault walk.
+- **Prompt-cache opportunity (follow-up, not this PR):** the stable prefix
+  `policy + persona + goals` is identical across turns — Anthropic `cache_control` would
+  stop re-billing those tokens. The gateway has no cache_control path today; tracked below.
+
+### Failure modes (each new codepath)
+- `readPersona` file read fails → base persona message, never throw. Test ✓ (planned).
+- Bootstrap drafting gateway call errors → answers retained + inline retry; user sees a
+  clear retry, not a silent drop. Test ✓ (planned).
+- Goals-update `update` regenerates `_assistant.goals.md` → tiny separate file means the
+  persona prose can't be collateral; review-queue diff is the human gate. CRITICAL path.
+- Persona goes stale after external edit → vaultWatcher refresh covers it; if the watcher
+  misses an event, worst case is one stale turn (not data loss).
+- Token budget exceeded → central assembly truncates lowest-priority first; no window blow.
+- **No critical SILENT gap:** the one trust-critical surface (a goals update touching
+  persona prose) is both structurally prevented (separate file) AND visible (review diff).
+
+### Worktree parallelization
+- Lane A (sequential, shared `src/main` + `src/gateway`): persona module → context-assembly
+  + budget → aiSession wiring → bootstrap orchestration. Core data/prompt path; one lane.
+- Lane B (independent, `src/main/vaultScan.ts` + test): `recentlyTouched` mtime helper.
+- Lane C (independent, `src/renderer`): identity chip, focus chip, in-stream bootstrap
+  rendering, staleness nudge, payoff turn (UI; depends on the IPC contract shape from A).
+- Order: launch A + B in parallel; C joins once A's IPC contract lands. TTS is a separate
+  PR entirely. (D12 aria-live already shipped on this branch.)
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | CLEAR (assistant persona, 2026-06-09) | persona-first sequencing locked |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR (PLAN) | 10 issues, 0 critical gaps, 0 unresolved |
+| Outside Voice | `/plan-eng-review` | Independent challenge | 1 | issues_found (Claude subagent; Codex 401) | 3 fixes accepted, 1 held |
+| Design Review | `/plan-design-review` | UI/UX gaps | 1 | CLEAR (FULL) | score 3/10 → 9/10, 17 decisions, 0 unresolved |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | n/a (no developer surface) |
+
+- **OUTSIDE VOICE:** Codex was unauthenticated (401); fell back to an independent Claude
+  subagent, which code-verified two corrections — the `vaultWatcher` self-write hole in the
+  persona re-read (ARCH-3 fixed) and grounding being truncated first (ARCH-4 budget order
+  reversed) — plus refined the goals-split rationale (kept). Build-all-in-one-PR was held.
+- **BUILT THIS REVIEW:** D12 grounding badge announced to screen readers via an `aria-live`
+  region; pure logic extracted to `src/renderer/groundingText.ts` + `test/groundingText.test.ts`
+  (5 tests). Typecheck + build clean, **198/198 tests pass**.
+- **UNRESOLVED:** 0.
+- **VERDICT:** CEO + DESIGN + ENG CLEARED — ready to implement. TTS (D8) and the
+  prompt-cache prefix are separate follow-up PRs. Phase 2 (agentic loop) gets its own review.

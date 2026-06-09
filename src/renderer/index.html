@@ -109,6 +109,20 @@
       button {
         font-family: inherit;
       }
+      /* Screen-reader-only: present in the a11y tree, off-screen visually.
+         Used by #sr-announce (aria-live) to voice the D12 grounding state. */
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        margin: -1px;
+        padding: 0;
+        border: 0;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        clip-path: inset(50%);
+        white-space: nowrap;
+      }
       body {
         margin: 0;
         font-family: var(--font);
@@ -1409,6 +1423,9 @@
         </div>
 
         <div id="messages"></div>
+        <!-- D12: polite live region so screen readers hear whether each answer
+             was grounded in the vault — the badge's trust signal, made audible. -->
+        <div id="sr-announce" class="sr-only" aria-live="polite" aria-atomic="true"></div>
 
         <section class="review-queue" id="review-queue" hidden>
           <div class="rq-head">
