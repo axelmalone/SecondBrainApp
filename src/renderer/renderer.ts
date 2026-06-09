@@ -1304,10 +1304,25 @@ indexBtn.addEventListener("click", async () => {
   groundDot.classList.remove("on");
   groundState.textContent = "Indexing your vault… (first run downloads the local model)";
   indexBtn.hidden = true;
-  // refreshGroundingStatus self-polls the labeled progress while indexing runs.
-  void refreshGroundingStatus();
+  // Poll live progress on an INTERVAL while the index call runs — not a single
+  // status read. The button-triggered index dispatches `ai:groundingStatus`
+  // before `ai:indexVault` reaches main, so a one-shot read lands before the
+  // grounder flips its `indexing` flag, sees `indexing:false`, reverts the
+  // button, and never recovers (the regression D16 #10 introduced). An interval
+  // keeps reading until indexing actually begins, then shows labeled progress.
+  const poll = window.setInterval(() => {
+    void window.secondBrain.aiGroundingStatus().then((s) => {
+      if (s.indexing && s.total > 0) {
+        const pct = Math.round((100 * s.processed) / s.total);
+        const notes = s.notesTotal > 0 ? ` across ${s.notesTotal} notes` : "";
+        groundState.textContent = `Indexing… ${pct}% · ${s.processed}/${s.total} sections${notes}`;
+        groundState.title = groundState.textContent;
+      }
+    });
+  }, 400);
 
   const res = await window.secondBrain.aiIndexVault();
+  window.clearInterval(poll);
   indexBtn.disabled = false;
   if (res.ok) {
     setStatus(`Indexed ${res.notes} notes (${res.chunks} chunks).`);
