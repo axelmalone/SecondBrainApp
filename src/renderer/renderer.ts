@@ -852,8 +852,19 @@ const srAnnounceEl = $<HTMLDivElement>("sr-announce");
 const promptEl = $<HTMLTextAreaElement>("prompt");
 const sendBtn = $<HTMLButtonElement>("send");
 const indexBtn = $<HTMLButtonElement>("index-btn");
+const agenticToggle = $<HTMLButtonElement>("agentic-toggle");
 const groundState = $<HTMLSpanElement>("ground-state");
 const groundDot = $<HTMLSpanElement>("ground-dot");
+
+// Spike toggle: route the next turn through the agentic loop (model searches +
+// reads the vault via tools) instead of the embedding-injection path. Lets the
+// two retrieval architectures be compared side by side before committing.
+let agenticMode = false;
+agenticToggle.addEventListener("click", () => {
+  agenticMode = !agenticMode;
+  agenticToggle.textContent = `Agentic: ${agenticMode ? "on" : "off"}`;
+  agenticToggle.classList.toggle("on", agenticMode);
+});
 const chatSwitchBtn = $<HTMLButtonElement>("chat-switch");
 const currentChatTitleEl = $<HTMLSpanElement>("current-chat-title");
 const chatListPop = $<HTMLDivElement>("chat-list");
@@ -1502,6 +1513,7 @@ async function send(): Promise<void> {
     // saved version — so a brand-new or unsaved note is reflected accurately.
     {
       ground: true,
+      agentic: agenticMode,
       chatId,
       turnTs,
       ...(currentPath
