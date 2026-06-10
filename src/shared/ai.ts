@@ -12,8 +12,21 @@ export interface ModelSpec {
 }
 
 export interface ChatMessage {
-  role: "system" | "user" | "assistant";
+  role: "system" | "user" | "assistant" | "tool";
   content: string;
+  /**
+   * (1A) Tool calls this assistant turn emitted. Set ONLY by the agentic loop
+   * when it replays the assistant's tool-use turn back to the provider; the
+   * renderer never sets this (it still only ever holds plain user/assistant
+   * text). The adapters reconstruct each provider's tool-call shape from it (6A).
+   */
+  toolCalls?: ToolCall[];
+  /**
+   * (1A) The id of the tool call a `role: "tool"` message answers. Lets the
+   * adapters key the result to its call (Anthropic `tool_use_id` / OpenAI
+   * `tool_call_id`). Set ONLY by the agentic loop.
+   */
+  toolCallId?: string;
 }
 
 /**
@@ -128,6 +141,13 @@ export type GroundingMeta =
 export interface AiSendOptions {
   /** When true, retrieve vault context and inject it before answering. */
   ground?: boolean;
+  /**
+   * (Strangler-fig) When true, answer via the AGENTIC loop — the model calls
+   * read tools (search_vault / read_note) on demand instead of the one-shot
+   * embedding injection. Default false: the embedding path stays the default
+   * until agentic is proven, then the default flips.
+   */
+  agentic?: boolean;
   /** The chat this turn belongs to — backref stored with any proposal. */
   chatId?: string;
   /** The timestamp of the user turn — backref stored with any proposal. */

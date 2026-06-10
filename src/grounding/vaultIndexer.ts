@@ -12,6 +12,7 @@ import type {
   Embedder,
   GroundingResult,
   IndexedChunk,
+  ScoredChunk,
 } from "./types.js";
 
 const MARKDOWN_EXT = new Set([".md", ".markdown"]);
@@ -452,5 +453,35 @@ export class GroundingService {
       return Promise.resolve(retrieveLexical(this.lexical, query, opts));
     }
     return retrieve(this.embedder, this.index, query, opts);
+  }
+
+  /** Raw BM25 search over the vault — the `search_vault` tool engine for the
+   *  agentic path. No model, always works once the lexical index is built. */
+  searchLexical(query: string, k: number): ScoredChunk[] {
+    return this.lexical.search(query, k);
+  }
+
+  /**
+   * Build ONLY the lexical (BM25) index if it isn't already populated — the
+   * agentic path needs keyword search but NOT embeddings, so this is the cheap,
+   * no-model, no-embed build (chunk every note, add to the lexical index). A
+   * no-op once the lexical index has content (e.g. after a normal indexVault).
+   */
+  async ensureLexical(root: string): Promise<void> {
+    if (this.lexical.size > 0) return;
+    const files = await listMarkdown(root);
+    for (const file of files) {
+      let md: string;
+      try {
+        md = await fs.readFile(file, "utf8");
+      } catch {
+        continue;
+      }
+      const chunks = chunkMarkdown(file, md, this.chunkOptions());
+      if (chunks.length > 0) {
+        this.lexical.add(chunks);
+        this.notePaths.add(file);
+      }
+    }
   }
 }

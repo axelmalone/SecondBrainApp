@@ -1,5 +1,6 @@
 import { GatewayError } from "../errors.js";
 import type {
+  ChatMessage,
   ChatRequest,
   ChatResponse,
   ProviderAdapter,
@@ -44,6 +45,51 @@ function classifyError(status: number, body: string): GatewayError {
   return new GatewayError("BadResponse", { status });
 }
 
+/**
+ * Reconstruct Anthropic's message array from our ChatMessage list (6A).
+ * - assistant turns with `toolCalls` become `content: [text?, ...tool_use]`.
+ * - `role: "tool"` messages have no Anthropic role; they map to `tool_result`
+ *   blocks inside a USER turn. CONSECUTIVE tool results collapse into ONE user
+ *   turn so a turn that emitted N parallel tool calls gets all N results back in
+ *   a single turn (Anthropic 400s on a missing tool_result).
+ */
+function toAnthropicMessages(
+  msgs: ChatMessage[]
+): { role: string; content: unknown }[] {
+  const out: { role: string; content: unknown }[] = [];
+  let pendingResults: unknown[] = [];
+  const flush = (): void => {
+    if (pendingResults.length > 0) {
+      out.push({ role: "user", content: pendingResults });
+      pendingResults = [];
+    }
+  };
+  for (const m of msgs) {
+    if (m.role === "system") continue;
+    if (m.role === "tool") {
+      pendingResults.push({
+        type: "tool_result",
+        tool_use_id: m.toolCallId,
+        content: m.content,
+      });
+      continue;
+    }
+    flush();
+    if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
+      const blocks: unknown[] = [];
+      if (m.content.length > 0) blocks.push({ type: "text", text: m.content });
+      for (const tc of m.toolCalls) {
+        blocks.push({ type: "tool_use", id: tc.id, name: tc.name, input: tc.input });
+      }
+      out.push({ role: "assistant", content: blocks });
+    } else {
+      out.push({ role: m.role, content: m.content });
+    }
+  }
+  flush();
+  return out;
+}
+
 export const anthropicAdapter: ProviderAdapter = {
   id: "anthropic",
 
@@ -53,9 +99,7 @@ export const anthropicAdapter: ProviderAdapter = {
       .filter((m) => m.role === "system")
       .map((m) => m.content)
       .join("\n\n");
-    const messages = req.messages
-      .filter((m) => m.role !== "system")
-      .map((m) => ({ role: m.role, content: m.content }));
+    const messages = toAnthropicMessages(req.messages);
 
     const body: Record<string, unknown> = {
       model: req.model.model,
