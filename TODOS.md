@@ -190,6 +190,38 @@
 - **Effort:** S (human) / S (CC). **Priority:** P1.5 (do alongside installer setup).
   **Depends on:** an Electron packaging/installer pipeline existing.
 
+### Background embedder worker pool (deferred from eng review 2026-06-09, decision 4B)
+- **What:** Parallelize backfill embedding across 2-3 stock-Node embedder children instead
+  of the single low-priority worker, so semantic mode lights up sooner on a cold index.
+- **Why:** The "feel instant" lexical path (this branch) makes grounding usable immediately,
+  but semantic answers still trickle in one-batch-at-a-time on a single core. A small pool
+  cuts time-to-semantic roughly with the worker count. Deliberately NOT shipped with the
+  lexical work: it's a separable speedup with real cost.
+- **Cons / risk:** N×~400MB RAM on the M2; `embedFlat` becomes concurrent (today it awaits
+  one batch at a time) with progress accounting across workers; idle-reap/crash lifecycle ×N.
+- **Context:** Cold first index is the only slow path (D16 makes re-index cheap). Office-hours
+  chose perceived speed over raw throughput; eng review deferred the pool so the lexical-instant
+  diff stays small and low-risk.
+- **Effort:** M (human) / S-M (CC). **Priority:** P1.5. **GATED ON MEASUREMENT:** only build
+  if "The Assignment" (instrument cold-index wall-clock + time-to-semantic) shows the single
+  worker is too slow to be acceptable. Measure first. **Depends on:** the lexical-instant path
+  landing; `ChildProcessEmbedder` (already pool-shaped).
+
+### Hybrid RRF retrieval fusion — tuning (deferred from eng review 2026-06-09, decision 5A)
+- **What:** Once a vault is fully embedded, always blend lexical (BM25) + vector results via
+  Reciprocal Rank Fusion instead of pure-vector. The `merge()` seam in `retrieve.ts` ships with
+  the lexical work; this is the always-on lexical query + fusion constant (k)/weight tuning.
+- **Why:** A personal vault is full of exact names, `#tags`, `[[wikilinks]]`, project titles
+  that BM25 nails and embeddings sometimes miss. Hybrid generally beats pure-vector for recall
+  here. The lexical query is cheap, so the marginal cost is mostly tuning + tests.
+- **Cons / risk:** A fusion constant + weights to tune against the D9 grounding eval set; a
+  lexical search runs on every turn (currently only during backfill); changes today's working
+  pure-vector steady-state behavior.
+- **Context:** Eng review shipped clean fallback (keyword while backfilling → pure-vector once
+  embedded) with the merge seam built so this drops in without touching callers.
+- **Effort:** S-M (human) / S (CC). **Priority:** P1.5. **Depends on:** the 5A `merge()` seam
+  landing; the `eval/grounding/run.ts` set as the tuning gate (don't tune by vibes).
+
 ## P2 — Deferred (from CEO plan 2026-06-04)
 
 > CONFIRMED DEFERRED (D15, 2026-06-07): indie-vs-venture, open-core distribution, and

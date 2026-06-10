@@ -42,9 +42,18 @@ export function uniqueNoteNames(sources: readonly GroundingSource[]): string[] {
 export function groundingAnnouncement(grounding: GroundingMeta): string {
   if (grounding.grounded) {
     const names = uniqueNoteNames(grounding.sources);
-    return names.length > 0
-      ? `Answer grounded in ${names.length} note${names.length === 1 ? "" : "s"}: ${names.join(", ")}.`
-      : "Answer grounded in your vault.";
+    // Keyword mode (the instant lexical path used while embeddings backfill) is
+    // spoken differently so a screen-reader user hears that the answer came from
+    // a keyword match, not the deeper semantic index — the same honesty the
+    // visual badge carries.
+    const keyword = grounding.mode === "keyword";
+    if (names.length === 0) {
+      return keyword
+        ? "Answer drawn from a keyword match in your vault."
+        : "Answer grounded in your vault.";
+    }
+    const lead = keyword ? "Answer drawn from a keyword match in" : "Answer grounded in";
+    return `${lead} ${names.length} note${names.length === 1 ? "" : "s"}: ${names.join(", ")}.`;
   }
   return `Answering without vault context: ${UNGROUNDED_REASON[grounding.reason]}.`;
 }

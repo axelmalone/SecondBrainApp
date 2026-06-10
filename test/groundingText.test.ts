@@ -12,21 +12,37 @@ describe("groundingAnnouncement (D12 aria-live wording)", () => {
   it("names the cited notes (deduped, .md stripped) when grounded", () => {
     const g: GroundingMeta = {
       grounded: true,
+      mode: "semantic",
       sources: [src("Projects/Helsinki.md"), src("Projects/Helsinki.md"), src("Pricing.md")],
-    } as GroundingMeta;
+    };
     expect(groundingAnnouncement(g)).toBe(
       "Answer grounded in 2 notes: Helsinki, Pricing."
     );
   });
 
   it("uses the singular 'note' for exactly one source", () => {
-    const g: GroundingMeta = { grounded: true, sources: [src("Daily.md")] } as GroundingMeta;
+    const g: GroundingMeta = { grounded: true, mode: "semantic", sources: [src("Daily.md")] };
     expect(groundingAnnouncement(g)).toBe("Answer grounded in 1 note: Daily.");
   });
 
   it("falls back to a generic grounded phrase when grounded but no named sources", () => {
-    const g: GroundingMeta = { grounded: true, sources: [] } as GroundingMeta;
+    const g: GroundingMeta = { grounded: true, mode: "semantic", sources: [] };
     expect(groundingAnnouncement(g)).toBe("Answer grounded in your vault.");
+  });
+
+  it("speaks keyword mode distinctly so the deep index isn't implied", () => {
+    const named: GroundingMeta = {
+      grounded: true,
+      mode: "keyword",
+      sources: [src("Daily.md")],
+    };
+    expect(groundingAnnouncement(named)).toBe(
+      "Answer drawn from a keyword match in 1 note: Daily."
+    );
+    const unnamed: GroundingMeta = { grounded: true, mode: "keyword", sources: [] };
+    expect(groundingAnnouncement(unnamed)).toBe(
+      "Answer drawn from a keyword match in your vault."
+    );
   });
 
   it("speaks every ungrounded reason — the trust signal a blind user must hear", () => {

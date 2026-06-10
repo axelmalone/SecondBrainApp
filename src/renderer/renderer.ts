@@ -953,7 +953,10 @@ function makeBadge(grounding: GroundingMeta): HTMLSpanElement {
   if (grounding.grounded) {
     const names = uniqueNoteNames(grounding.sources).join(", ");
     badge.className = "badge grounded";
-    badge.textContent = `grounded · ${names}`;
+    // Honest per-answer mode (2A): "keyword match" while the deep index is still
+    // backfilling, "grounded" once semantic retrieval answered.
+    const label = grounding.mode === "keyword" ? "keyword match" : "grounded";
+    badge.textContent = `${label} · ${names}`;
   } else {
     badge.className = "badge ungrounded";
     badge.textContent = `answering without vault context (${UNGROUNDED_REASON[grounding.reason]})`;
@@ -1262,12 +1265,14 @@ async function refreshGroundingStatus(): Promise<void> {
     groundDot.classList.remove("on");
     // Labeled progress ("sections", not a bare chunk count) for both the button
     // index and the automatic launch reconcile.
+    // The lexical index fills almost immediately, so grounding already answers in
+    // keyword mode while the embeddings backfill — say so, so the progress bar
+    // reads as "already useful" rather than "blocked".
     if (s.total > 0) {
       const pct = Math.round((100 * s.processed) / s.total);
-      const notes = s.notesTotal > 0 ? ` across ${s.notesTotal} notes` : "";
-      groundState.textContent = `Indexing… ${pct}% · ${s.processed}/${s.total} sections${notes}`;
+      groundState.textContent = `Deep index ${pct}% · ${s.processed}/${s.total} sections — answers use keyword search now`;
     } else {
-      groundState.textContent = "Indexing your vault…";
+      groundState.textContent = "Reading your vault… keyword search is live";
     }
     indexBtn.hidden = true;
     // Self-poll until it finishes — covers the auto-reconcile that may start
@@ -1283,7 +1288,11 @@ async function refreshGroundingStatus(): Promise<void> {
   }
   if (s.ready) {
     groundDot.classList.add("on");
-    groundState.textContent = `Vault connected · ${s.notes} notes`;
+    // ready can be true on the lexical index alone (e.g. a backfill that hasn't
+    // finished embedding); say "keyword" so the user knows semantic isn't up yet.
+    groundState.textContent = s.semanticReady
+      ? `Vault connected · ${s.notes} notes`
+      : `Vault connected (keyword) · ${s.notes} notes`;
     indexBtn.hidden = false;
     indexBtn.classList.remove("cta");
     indexBtn.textContent = "Re-index";

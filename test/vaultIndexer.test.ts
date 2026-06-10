@@ -26,6 +26,72 @@ class FakeEmbedder implements Embedder {
   }
 }
 
+/**
+ * An embedder whose embed() blocks until `release()` is called, and exposes a
+ * `started` promise that resolves once embedding begins. Lets a test observe the
+ * mid-backfill window (lexical ready, vectors not) deterministically.
+ */
+class GatedEmbedder implements Embedder {
+  readonly dimension = DIM;
+  calls = 0;
+  started: Promise<void>;
+  private signalStarted!: () => void;
+  private gate: Promise<void>;
+  release!: () => void;
+  constructor() {
+    this.started = new Promise((r) => (this.signalStarted = r));
+    this.gate = new Promise((r) => (this.release = r));
+  }
+  async embed(texts: string[]): Promise<number[][]> {
+    this.calls += 1;
+    this.signalStarted();
+    await this.gate;
+    return texts.map((t) => {
+      const v = new Array<number>(DIM).fill(0);
+      for (const tok of t.toLowerCase().match(/[a-z0-9]+/g) ?? []) {
+        let h = 0;
+        for (let i = 0; i < tok.length; i++) h = (h * 31 + tok.charCodeAt(i)) | 0;
+        const b = Math.abs(h) % DIM;
+        v[b] = (v[b] ?? 0) + 1;
+      }
+      return v;
+    });
+  }
+}
+
+/**
+ * An embedder that gates only the FIRST `gateUpTo` calls (each blocks until
+ * released individually); later calls resolve immediately. Lets a test inject
+ * edits at the two interesting points (the bulk embed, and the first drain
+ * embed) without having to predict how many drain rounds convergence takes.
+ */
+class SteppedEmbedder implements Embedder {
+  readonly dimension = DIM;
+  calls = 0;
+  gateUpTo = 0;
+  private releases: Array<() => void> = [];
+  async embed(texts: string[]): Promise<number[][]> {
+    const n = ++this.calls;
+    if (n <= this.gateUpTo) await new Promise<void>((r) => (this.releases[n] = r));
+    return texts.map((t) => {
+      const v = new Array<number>(DIM).fill(0);
+      for (const tok of t.toLowerCase().match(/[a-z0-9]+/g) ?? []) {
+        let h = 0;
+        for (let i = 0; i < tok.length; i++) h = (h * 31 + tok.charCodeAt(i)) | 0;
+        const b = Math.abs(h) % DIM;
+        v[b] = (v[b] ?? 0) + 1;
+      }
+      return v;
+    });
+  }
+  async waitForCall(n: number): Promise<void> {
+    while (this.calls < n) await new Promise((r) => setTimeout(r, 1));
+  }
+  release(n: number): void {
+    this.releases[n]?.();
+  }
+}
+
 let vault: string;
 afterEach(async () => {
   if (vault) await fs.rm(vault, { recursive: true, force: true });
@@ -182,6 +248,130 @@ describe("GroundingService incremental re-index (D2)", () => {
     expect(svc.status().notes).toBe(1);
     expect(svc.status().chunks).toBeLessThan(chunksBefore);
   });
+
+  it("indexVault makes the vault answerable in keyword mode with 0 vectors (2A)", async () => {
+    vault = await makeVault({ "a.md": "alpha apple orchard", "b.md": "beta banana bunch" });
+    const embedder = new GatedEmbedder();
+    const svc = new GroundingService(embedder);
+    const p = svc.indexVault(vault);
+    await embedder.started; // chunk pass done, lexical filled, blocked on embed
+
+    const mid = svc.status();
+    expect(mid.indexing).toBe(true);
+    expect(mid.ready).toBe(true); // lexical answers immediately…
+    expect(mid.semanticReady).toBe(false); // …before any vector exists
+
+    // 3A: mid-backfill queries take the keyword path (no vector embed of the query).
+    const kw = await svc.ground("apple orchard");
+    expect(kw.status).toBe("grounded");
+    if (kw.status === "grounded") expect(kw.mode).toBe("keyword");
+
+    embedder.release();
+    await p;
+
+    const done = svc.status();
+    expect(done.semanticReady).toBe(true);
+    const sem = await svc.ground("apple orchard");
+    if (sem.status === "grounded") expect(sem.mode).toBe("semantic"); // upgraded
+  }, 15000);
+
+  it("an edit during backfill updates keyword search WITHOUT embedding (9A regression)", async () => {
+    vault = await makeVault({ "a.md": "alpha apple", "b.md": "beta banana" });
+    const embedder = new GatedEmbedder();
+    const svc = new GroundingService(embedder);
+    const p = svc.indexVault(vault);
+    await embedder.started;
+    expect(embedder.calls).toBe(1); // the single backfill batch, now blocked
+
+    await fs.writeFile(path.join(vault, "a.md"), "cherry cherry cherry", "utf8");
+    await svc.reindexNote(path.join(vault, "a.md"));
+
+    // 9A: the edit must NOT fire a synchronous one-note embed mid-backfill…
+    expect(embedder.calls).toBe(1);
+    // …yet the new content is already keyword-searchable (lexical stayed in step).
+    const res = await svc.ground("cherry");
+    expect(res.status).toBe("grounded");
+    if (res.status === "grounded") {
+      expect(res.mode).toBe("keyword");
+      expect(res.chunks[0]?.notePath).toBe(path.join(vault, "a.md"));
+    }
+
+    embedder.release();
+    await p;
+
+    // AFTERMATH (no lost update): once the backfill settles, SEMANTIC search must
+    // find the NEW content — the stale pre-edit "alpha apple" vector must never
+    // have been written. drainDirty re-embedded a.md from current disk.
+    expect(svc.status().semanticReady).toBe(true);
+    const after = await svc.ground("cherry");
+    expect(after.status).toBe("grounded");
+    if (after.status === "grounded") {
+      expect(after.mode).toBe("semantic");
+      expect(after.chunks.some((c) => c.notePath === path.join(vault, "a.md"))).toBe(true);
+    }
+  }, 15000);
+
+  it("removeNote during backfill drops the note from keyword results too", async () => {
+    vault = await makeVault({ "a.md": "alpha apple", "b.md": "beta banana" });
+    const embedder = new GatedEmbedder();
+    const svc = new GroundingService(embedder);
+    const p = svc.indexVault(vault);
+    await embedder.started;
+
+    svc.removeNote(path.join(vault, "a.md"));
+    const res = await svc.ground("alpha apple");
+    if (res.status === "grounded") {
+      expect(res.chunks.every((c) => !c.notePath.endsWith("a.md"))).toBe(true);
+    }
+
+    embedder.release();
+    await p;
+
+    // AFTERMATH (no resurrection): after backfill, a.md stays gone from BOTH the
+    // note set and semantic results — the attach loop must not re-add its snapshot.
+    expect(svc.status().notes).toBe(1);
+    const after = await svc.ground("alpha apple");
+    if (after.status === "grounded") {
+      expect(after.chunks.every((c) => !c.notePath.endsWith("a.md"))).toBe(true);
+    }
+  }, 15000);
+
+  it("re-drains a note edited DURING drainDirty's own embed (final content wins)", async () => {
+    const a = () => path.join(vault, "a.md");
+    vault = await makeVault({ "a.md": "alpha version one", "b.md": "beta banana" });
+    const embedder = new SteppedEmbedder();
+    embedder.gateUpTo = 2; // gate the bulk (call 1) and the first drain (call 2)
+    const svc = new GroundingService(embedder);
+    const p = svc.indexVault(vault);
+
+    await embedder.waitForCall(1); // bulk batch entered (a v1 + b), blocked
+    await fs.writeFile(a(), "cherry version two", "utf8");
+    await svc.reindexNote(a()); // dirtied mid-backfill
+    embedder.release(1); // bulk done → attach skips a → drainDirty embeds a (call 2)
+
+    await embedder.waitForCall(2); // drainDirty's embed of a-v2, blocked
+    await fs.writeFile(a(), "mango version three", "utf8");
+    await svc.reindexNote(a()); // edited AGAIN during drainDirty's await → re-dirtied
+    embedder.release(2); // loop sees dirty again → re-drains from current disk (auto-resolves)
+
+    await p;
+
+    // The loop re-drained until quiescent, so the FINAL on-disk content (mango)
+    // is what semantic search returns — no stale "cherry"/"alpha" vector survived.
+    expect(svc.status().semanticReady).toBe(true);
+    const res = await svc.ground("mango version three");
+    expect(res.status).toBe("grounded");
+    if (res.status === "grounded") {
+      expect(res.mode).toBe("semantic");
+      expect(res.chunks.some((c) => c.notePath === a())).toBe(true);
+    }
+    // The stale earlier content must NOT be the top semantic hit for a.md.
+    const stale = await svc.ground("alpha version one");
+    if (stale.status === "grounded") {
+      const top = stale.chunks[0];
+      if (top?.notePath === a()) expect(top.text).toContain("mango");
+    }
+  }, 15000);
 
   it("reindexNote on an unembeddable note keeps prior chunks (no data loss)", async () => {
     vault = await makeVault({ "a.md": "alpha apple" });

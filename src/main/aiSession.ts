@@ -38,6 +38,7 @@ import type {
   ChatMessage,
   ChatRequest,
   GroundingMeta,
+  GroundingMode,
   GroundingStatus,
   ModelSpec,
   PersonaFileStatus,
@@ -250,14 +251,15 @@ function lastUserMessage(messages: ChatMessage[]): string | undefined {
  * summary count.
  */
 function orderedSources(
-  chunks: { notePath: string; heading?: string }[]
+  chunks: { notePath: string; heading?: string }[],
+  mode: GroundingMode
 ): GroundingMeta {
   const sources = chunks.map((c) =>
     c.heading !== undefined
       ? { notePath: c.notePath, heading: c.heading }
       : { notePath: c.notePath }
   );
-  return { grounded: true, sources };
+  return { grounded: true, mode, sources };
 }
 
 /**
@@ -290,7 +292,7 @@ async function applyGrounding(
   if (result.status === "grounded") {
     return {
       groundingMessages: [{ role: "system", content: result.injected }],
-      grounding: orderedSources(result.chunks),
+      grounding: orderedSources(result.chunks, result.mode),
     };
   }
   return {
@@ -428,6 +430,7 @@ export function aiGroundingStatus(): GroundingStatus {
   if (!grounder) {
     return {
       ready: false,
+      semanticReady: false,
       indexing: false,
       notes: 0,
       chunks: 0,
