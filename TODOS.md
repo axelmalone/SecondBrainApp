@@ -222,6 +222,33 @@
 - **Effort:** S-M (human) / S (CC). **Priority:** P1.5. **Depends on:** the 5A `merge()` seam
   landing; the `eval/grounding/run.ts` set as the tuning gate (don't tune by vibes).
 
+### Agentic retrieval — post-spike follow-ups (eng review 2026-06-10)
+- **What:** Once the agentic-retrieval spike proves out, (a) add richer read tools
+  (`backlinks`, `follow_links`, `list_recent`), (b) build the "opened: …" provenance
+  UI (replaces the D12 grounded badge), (c) flip the default off embeddings and
+  DELETE the embedding subsystem (transformers dep, childEmbedder, embedderChild,
+  embedderTransformers, indexStore/D16, the D17 bundling task, always-on injection).
+- **Why:** The strangler fig only pays off if the deletion actually happens; without
+  a tracked item the dormant embedding code (and the 90MB model + transformers vulns)
+  lives forever. The richer tools + provenance are the polish the spike deferred.
+- **GATE:** Only after the spike shows agentic recall **>=** the embedding path on a
+  set of real vault questions (The Assignment + a side-by-side eval). If 1-2 questions
+  need true semantic matching, KEEP embeddings as an optional `deep_search` tool
+  instead of deleting — the dormant path earns its keep.
+- **Effort:** M (human) / M (CC). **Priority:** P1.5. **Depends on:** the spike
+  landing (tool-result plumbing + search_vault/read_note + loop). Design doc:
+  `~/.gstack/projects/axelmalone-SecondBrainApp/axelmalone-agentic-retrieval-design-20260610-202929.md`.
+
+### Agentic loop token-cost / caching (eng review 2026-06-10)
+- **What:** The agentic loop resends the full transcript + up-to-8k note bodies every
+  round (~5 rounds), so per-question tokens/latency balloon. Explore Anthropic prompt
+  caching (`cache_control` on system + earlier turns) and/or dropping/summarizing
+  stale `tool_result`s once the model has used them.
+- **Why:** It's the main cost tax of agentic retrieval; for a BYO-key user it's real
+  money + latency on every question.
+- **GATE:** Measure real per-question cost on the spike FIRST — don't pre-optimize.
+- **Effort:** S-M (human) / S (CC). **Priority:** P1.5. **Depends on:** the spike landing.
+
 ## P2 — Deferred (from CEO plan 2026-06-04)
 
 > CONFIRMED DEFERRED (D15, 2026-06-07): indie-vs-venture, open-core distribution, and
