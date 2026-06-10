@@ -1,4 +1,9 @@
-import type { Embedder, GroundingResult, ScoredChunk } from "./types.js";
+import type {
+  Embedder,
+  GroundingResult,
+  LexicalSearch,
+  ScoredChunk,
+} from "./types.js";
 import type { VectorIndex } from "./vectorIndex.js";
 
 export interface RetrieveOptions {
@@ -74,5 +79,66 @@ export async function retrieve(
   const usable = scored.filter((c) => c.score >= minScore);
   if (usable.length === 0) return { status: "unavailable", reason: "no-matches" };
 
-  return { status: "grounded", chunks: usable, injected: buildContext(usable) };
+  return {
+    status: "grounded",
+    mode: "semantic",
+    chunks: usable,
+    injected: buildContext(usable),
+  };
+}
+
+/**
+ * The INSTANT retrieval path: BM25 lexical search, no model. Used while the
+ * embeddings backfill (and as the fallback if the vector index is empty). The
+ * lexical index applies its OWN relevance gate (score > 0 = real term overlap),
+ * so this never injects noise — an off-topic query yields no candidates and we
+ * honestly report `no-matches`, preserving the D12 contract for keyword answers.
+ * Synchronous (no embedding), but returns the same shape as the vector path so
+ * the caller is mode-agnostic.
+ */
+export function retrieveLexical(
+  lexical: LexicalSearch,
+  query: string,
+  options: RetrieveOptions = {}
+): GroundingResult {
+  const k = options.k ?? DEFAULT_K;
+  if (lexical.size === 0) return { status: "unavailable", reason: "empty-index" };
+  const scored = lexical.search(query, k);
+  if (scored.length === 0) return { status: "unavailable", reason: "no-matches" };
+  return {
+    status: "grounded",
+    mode: "keyword",
+    chunks: scored,
+    injected: buildContext(scored),
+  };
+}
+
+/**
+ * Reciprocal Rank Fusion (RRF) over several ranked chunk lists — the merge SEAM
+ * for the deferred hybrid path (5A). Not wired into the live retrieval flow yet
+ * (steady state stays pure-vector); it ships now, unit-tested in isolation, so
+ * turning on lexical+vector fusion later is a wiring change, not a rewrite.
+ *
+ * RRF score = Σ 1 / (rrfK + rank) across the lists a chunk appears in. Chunks
+ * are deduped by id; rank is 0-based within each input list. rrfK (default 60,
+ * the canonical value) damps the contribution of low-ranked items.
+ */
+export function mergeRankings(
+  rankings: readonly ScoredChunk[][],
+  k: number,
+  rrfK = 60
+): ScoredChunk[] {
+  const byId = new Map<string, { chunk: ScoredChunk; score: number }>();
+  for (const list of rankings) {
+    list.forEach((chunk, rank) => {
+      const contribution = 1 / (rrfK + rank);
+      const existing = byId.get(chunk.id);
+      if (existing) existing.score += contribution;
+      else byId.set(chunk.id, { chunk, score: contribution });
+    });
+  }
+  return [...byId.values()]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, k)
+    .map((e) => ({ ...e.chunk, score: e.score }));
 }

@@ -1,8 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { chunkMarkdown } from "../src/grounding/chunk.js";
 import { VectorIndex, cosine } from "../src/grounding/vectorIndex.js";
-import { retrieve, buildContext } from "../src/grounding/retrieve.js";
-import type { Embedder, IndexedChunk } from "../src/grounding/types.js";
+import {
+  retrieve,
+  retrieveLexical,
+  mergeRankings,
+  buildContext,
+} from "../src/grounding/retrieve.js";
+import { LexicalIndex } from "../src/grounding/lexicalIndex.js";
+import type { Embedder, IndexedChunk, ScoredChunk } from "../src/grounding/types.js";
 
 const DIM = 64;
 
@@ -93,6 +99,74 @@ describe("retrieve (D9 happy path)", () => {
     expect(res.chunks[0]?.notePath).toBe("cooking.md");
     expect(res.injected).toContain("Boil water");
     expect(res.injected).toContain("VAULT EXCERPTS");
+  });
+});
+
+describe("retrieve marks the semantic mode", () => {
+  it("a vector-grounded answer reports mode: semantic", async () => {
+    const embedder = new FakeEmbedder();
+    const index = await indexNotes(embedder, { "a.md": "boil water for pasta" });
+    const res = await retrieve(embedder, index, "pasta water", { minScore: 0.01 });
+    expect(res.status).toBe("grounded");
+    if (res.status === "grounded") expect(res.mode).toBe("semantic");
+  });
+});
+
+describe("retrieveLexical (the instant keyword path)", () => {
+  const lex = (notes: Record<string, string>): LexicalIndex => {
+    const ix = new LexicalIndex();
+    for (const [path, md] of Object.entries(notes)) {
+      ix.add(chunkMarkdown(path, md));
+    }
+    return ix;
+  };
+
+  it("grounds in keyword mode with no embedder, carrying chunks for [n] citations", () => {
+    const ix = lex({
+      "cooking.md": "# Pasta\n\nBoil water and add salt before the pasta.",
+      "finance.md": "# Budget\n\nTrack monthly spending in a spreadsheet.",
+    });
+    const res = retrieveLexical(ix, "how do I boil pasta", { k: 3 });
+    expect(res.status).toBe("grounded");
+    if (res.status !== "grounded") return;
+    expect(res.mode).toBe("keyword");
+    expect(res.chunks[0]?.notePath).toBe("cooking.md");
+    // The [n] citation contract: each excerpt keeps notePath + text so a keyword
+    // answer's inline [1] still resolves to a real source.
+    expect(res.injected).toContain("[1] cooking.md");
+    expect(res.injected).toContain("Boil water");
+  });
+
+  it("empty lexical index → empty-index; off-topic query → no-matches (D12 honesty)", () => {
+    expect(retrieveLexical(new LexicalIndex(), "anything")).toEqual({
+      status: "unavailable",
+      reason: "empty-index",
+    });
+    const ix = lex({ "a.md": "quantum chromodynamics lattice gauge theory" });
+    expect(retrieveLexical(ix, "banana smoothie recipe")).toEqual({
+      status: "unavailable",
+      reason: "no-matches",
+    });
+  });
+});
+
+describe("mergeRankings (RRF seam for the deferred hybrid path)", () => {
+  const sc = (id: string, score: number): ScoredChunk => ({
+    id,
+    notePath: id,
+    text: id,
+    score,
+  });
+
+  it("fuses two rankings by reciprocal rank, deduping by id", () => {
+    const lexical = [sc("a", 9), sc("b", 8), sc("c", 7)];
+    const vector = [sc("c", 0.9), sc("a", 0.8), sc("d", 0.7)];
+    const merged = mergeRankings([lexical, vector], 3);
+    // 'a' (ranks 0 and 1) and 'c' (ranks 2 and 0) appear in both → they rise
+    // above 'b' and 'd' which appear once.
+    expect(merged.map((c) => c.id).slice(0, 2).sort()).toEqual(["a", "c"]);
+    expect(merged.length).toBe(3);
+    expect(new Set(merged.map((c) => c.id)).size).toBe(3); // deduped
   });
 });
 

@@ -1,8 +1,9 @@
 import { promises as fs, type Dirent } from "node:fs";
 import * as path from "node:path";
 import { chunkMarkdown } from "./chunk.js";
-import { retrieve, type RetrieveOptions } from "./retrieve.js";
+import { retrieve, retrieveLexical, type RetrieveOptions } from "./retrieve.js";
 import { VectorIndex } from "./vectorIndex.js";
+import { LexicalIndex } from "./lexicalIndex.js";
 import { IndexStore, type StoredNote } from "./indexStore.js";
 import { readWithBaseline } from "../vault/hash.js";
 import type { DiskBaseline } from "../vault/types.js";
@@ -62,9 +63,19 @@ export class GroundingService {
   private static readonly EMBED_BATCH = 128;
 
   private readonly index = new VectorIndex();
+  /** The INSTANT lexical (BM25) index — populated from the same chunk pass as
+   *  the embedder, so grounding can answer the moment indexing starts while the
+   *  vectors backfill (the "feel instant" path). */
+  private readonly lexical = new LexicalIndex();
   /** Distinct note paths currently in the index (so counts survive replaceNote). */
   private readonly notePaths = new Set<string>();
   private indexing = false;
+  /** Notes the watcher edited or removed WHILE a backfill embed was in flight.
+   *  The bulk run snapshotted their chunks before the long embed, so writing the
+   *  snapshot's vectors back would be a lost update (edited) or a resurrected
+   *  delete (removed). The attach loop skips these and the run reconciles them
+   *  afterward (drainDirty). Only meaningful while `indexing` is true. */
+  private readonly dirtyDuringIndex = new Set<string>();
   /** Live indexing progress for the UI: chunks done/total + note count. */
   private progress = { done: 0, total: 0, notes: 0 };
 
@@ -77,6 +88,7 @@ export class GroundingService {
 
   status(): {
     ready: boolean;
+    semanticReady: boolean;
     indexing: boolean;
     notes: number;
     chunks: number;
@@ -84,11 +96,15 @@ export class GroundingService {
     total: number;
     notesTotal: number;
   } {
+    // ready = answerable NOW (lexical OR vector). semanticReady = vectors exist.
+    // During a cold backfill, ready is true (lexical filled) while semanticReady
+    // is still false — that gap is exactly the "feel instant" window.
     return {
-      ready: this.index.size > 0,
+      ready: this.index.size > 0 || this.lexical.size > 0,
+      semanticReady: this.index.size > 0,
       indexing: this.indexing,
       notes: this.notePaths.size,
-      chunks: this.index.size,
+      chunks: this.index.size > 0 ? this.index.size : this.lexical.size,
       processed: this.progress.done,
       total: this.progress.total,
       notesTotal: this.progress.notes,
@@ -101,13 +117,6 @@ export class GroundingService {
       : {};
   }
 
-  private async embedChunks(notePath: string, md: string): Promise<IndexedChunk[]> {
-    const chunks = chunkMarkdown(notePath, md, this.chunkOptions());
-    if (chunks.length === 0) return [];
-    const vectors = await this.embedder.embed(chunks.map((c) => c.text));
-    return chunks.map((c, i) => ({ ...c, vector: vectors[i] as number[] }));
-  }
-
   /** Embed a flat chunk list in EMBED_BATCH-sized calls, advancing progress. */
   private async embedFlat(chunks: Chunk[]): Promise<number[][]> {
     const vectors = new Array<number[]>(chunks.length);
@@ -118,6 +127,65 @@ export class GroundingService {
       this.progress.done = Math.min(i + slice.length, chunks.length);
     }
     return vectors;
+  }
+
+  /**
+   * Reconcile notes the watcher touched during the bulk embed (see
+   * `dirtyDuringIndex`). For each still-present edited note, re-read + re-embed
+   * from CURRENT disk content so its vectors match its lexical chunks (no stale
+   * snapshot). Removed notes are simply left out. Returns the freshly embedded
+   * notes so a persisting caller (reconcile) can fold them into the saved index.
+   * Runs at the tail of a backfill — bounded to the handful of notes edited in
+   * the embed window, so it does NOT reintroduce the per-edit jank 9A removed.
+   */
+  private async drainDirty(): Promise<StoredNote[]> {
+    // Keyed by path so re-processing the same note across rounds keeps only the
+    // latest result (and a later removal deletes it).
+    const updated = new Map<string, StoredNote>();
+    // LOOP until quiescent: a note re-edited during our OWN read/embed await is
+    // re-added to dirtyDuringIndex (reindexNote parks it because indexing is still
+    // true), so a single pass would leave stale vectors. Bounded so a pathological
+    // edit-storm can't spin forever — any residue self-heals on the next
+    // fingerprint reconcile (changed baseline → re-embed).
+    for (let round = 0; round < 50 && this.dirtyDuringIndex.size > 0; round++) {
+      const paths = [...this.dirtyDuringIndex];
+      this.dirtyDuringIndex.clear();
+      for (const p of paths) {
+        if (!this.notePaths.has(p)) {
+          updated.delete(p); // removed during backfill → stays out
+          continue;
+        }
+        let read;
+        try {
+          read = await readWithBaseline(p);
+        } catch {
+          this.removeNote(p);
+          updated.delete(p);
+          continue;
+        }
+        const chunks = chunkMarkdown(p, read.content.toString("utf8"), this.chunkOptions());
+        if (chunks.length === 0) {
+          this.removeNote(p);
+          updated.delete(p);
+          continue;
+        }
+        this.lexical.replaceNote(p, chunks);
+        try {
+          const vectors = await this.embedder.embed(chunks.map((c) => c.text));
+          const indexed: IndexedChunk[] = chunks.map((c, i) => ({
+            ...c,
+            vector: vectors[i] as number[],
+          }));
+          this.index.replaceNote(p, indexed);
+          updated.set(p, { path: p, baseline: read.baseline, chunks: indexed });
+        } catch {
+          // Embedding failed; the note stays keyword-searchable (lexical) and will
+          // be re-embedded on the next reconcile. No stale vector is written.
+          updated.delete(p);
+        }
+      }
+    }
+    return [...updated.values()];
   }
 
   /**
@@ -135,7 +203,9 @@ export class GroundingService {
       const saved = await this.store.load();
       const files = await listMarkdown(root);
       this.index.clear();
+      this.lexical.clear();
       this.notePaths.clear();
+      this.dirtyDuringIndex.clear();
 
       const current = new Map<string, StoredNote>();
       const toEmbed: { file: string; baseline: DiskBaseline; chunks: Chunk[] }[] = [];
@@ -155,6 +225,7 @@ export class GroundingService {
           cached.baseline.size === stats.size
         ) {
           this.index.add(cached.chunks);
+          this.lexical.add(cached.chunks);
           this.notePaths.add(file);
           current.set(file, cached);
           continue;
@@ -173,6 +244,7 @@ export class GroundingService {
             chunks: cached.chunks,
           };
           this.index.add(cached.chunks);
+          this.lexical.add(cached.chunks);
           this.notePaths.add(file);
           current.set(file, refreshed);
           continue;
@@ -182,7 +254,13 @@ export class GroundingService {
           read.content.toString("utf8"),
           this.chunkOptions()
         );
-        if (chunks.length > 0) toEmbed.push({ file, baseline: read.baseline, chunks });
+        if (chunks.length > 0) {
+          // Lexical is ready up front (no model), so a changed note is keyword-
+          // searchable immediately while its new vectors backfill below.
+          this.lexical.add(chunks);
+          this.notePaths.add(file);
+          toEmbed.push({ file, baseline: read.baseline, chunks });
+        }
       }
 
       // Embed only the new/changed notes (batched, gentle).
@@ -197,9 +275,23 @@ export class GroundingService {
           ...c,
           vector: vectors[k++] as number[],
         }));
+        // Skip a note the watcher edited/removed mid-embed — its snapshot vectors
+        // are stale (don't write them, don't resurrect a delete). drainDirty
+        // reconciles it from current disk just below.
+        if (this.dirtyDuringIndex.has(e.file) || !this.notePaths.has(e.file)) {
+          current.delete(e.file);
+          continue;
+        }
         this.index.add(indexed);
         this.notePaths.add(e.file);
         current.set(e.file, { path: e.file, baseline: e.baseline, chunks: indexed });
+      }
+
+      // Re-embed notes touched during the embed window from current disk content.
+      for (const note of await this.drainDirty()) current.set(note.path, note);
+      // A note removed during the window must not survive in the persisted set.
+      for (const p of [...current.keys()]) {
+        if (!this.notePaths.has(p)) current.delete(p);
       }
 
       // Persist the exact current set (drops deleted/superseded notes too).
@@ -225,10 +317,15 @@ export class GroundingService {
     this.progress = { done: 0, total: 0, notes: 0 };
     try {
       this.index.clear();
+      this.lexical.clear();
       this.notePaths.clear();
+      this.dirtyDuringIndex.clear();
       const files = await listMarkdown(root);
 
-      // 1. Chunk every readable note (no embedding yet).
+      // 1. Chunk every readable note (no embedding yet) and populate the lexical
+      //    index + note paths in the SAME pass. After this loop grounding is
+      //    already answerable in keyword mode — the vectors below just upgrade it
+      //    to semantic. One chunking pass feeds both indexes (chunk ids align).
       const perNote: { file: string; chunks: Chunk[] }[] = [];
       for (const file of files) {
         let md: string;
@@ -238,7 +335,11 @@ export class GroundingService {
           continue;
         }
         const chunks = chunkMarkdown(file, md, this.chunkOptions());
-        if (chunks.length > 0) perNote.push({ file, chunks });
+        if (chunks.length > 0) {
+          perNote.push({ file, chunks });
+          this.lexical.add(chunks);
+          this.notePaths.add(file);
+        }
       }
       this.progress.notes = perNote.length;
 
@@ -248,16 +349,21 @@ export class GroundingService {
       this.progress.total = flat.length;
       const vectors = await this.embedFlat(flat);
 
-      // 3. Reattach vectors to their notes and populate the index.
+      // 3. Reattach vectors to their notes and populate the index. Skip any note
+      //    the watcher edited/removed during the embed — its snapshot vectors are
+      //    stale; drainDirty re-embeds edited ones from current disk and leaves
+      //    removed ones out, so the vector index can't go stale or resurrect a delete.
       let k = 0;
       for (const n of perNote) {
         const indexed: IndexedChunk[] = n.chunks.map((c) => ({
           ...c,
           vector: vectors[k++] as number[],
         }));
+        if (this.dirtyDuringIndex.has(n.file) || !this.notePaths.has(n.file)) continue;
         this.index.add(indexed);
         this.notePaths.add(n.file);
       }
+      await this.drainDirty();
       return { notes: this.notePaths.size, chunks: this.index.size };
     } finally {
       this.indexing = false;
@@ -279,33 +385,72 @@ export class GroundingService {
       this.removeNote(notePath);
       return;
     }
-    let indexed: IndexedChunk[];
-    try {
-      indexed = await this.embedChunks(notePath, read.content.toString("utf8"));
-    } catch {
-      return; // embedding failed; keep the previous chunks rather than lose them
-    }
-    if (indexed.length === 0) {
+    const chunks = chunkMarkdown(
+      notePath,
+      read.content.toString("utf8"),
+      this.chunkOptions()
+    );
+    if (chunks.length === 0) {
       this.removeNote(notePath);
       return;
     }
-    this.index.replaceNote(notePath, indexed);
+    // ALWAYS refresh the lexical index — it's cheap (no model) and keeps keyword
+    // grounding consistent with disk on every edit, including mid-backfill.
+    this.lexical.replaceNote(notePath, chunks);
     this.notePaths.add(notePath);
+
+    // 9A: only EMBED when the vector index already exists AND no backfill is in
+    // flight. Embedding here gates on `semanticReady`, NOT on `ready` — otherwise
+    // an edit during the cold backfill (when lexical is ready but vectors aren't)
+    // would fire a synchronous one-note embed, the exact lag this design removes.
+    // While backfilling, the edit lands in lexical now and the running pass
+    // re-embeds it from current disk at its tail (drainDirty); in steady state we
+    // re-embed the one changed note here (D2).
+    if (this.index.size === 0 || this.indexing) {
+      if (this.indexing) this.dirtyDuringIndex.add(notePath);
+      return;
+    }
+    let indexed: IndexedChunk[];
+    try {
+      const vectors = await this.embedder.embed(chunks.map((c) => c.text));
+      indexed = chunks.map((c, i) => ({ ...c, vector: vectors[i] as number[] }));
+    } catch {
+      return; // embedding failed; keep the refreshed lexical chunks (no data loss)
+    }
+    this.index.replaceNote(notePath, indexed);
     // Persist this note so the saved index stays current as the user edits (D16).
     await this.store?.putNote({ path: notePath, baseline: read.baseline, chunks: indexed });
   }
 
-  /** Drop a note from the index (deleted/renamed-away on disk). */
+  /** Drop a note from BOTH indexes (deleted/renamed-away on disk). Lexical and
+   *  vector must move together or keyword grounding drifts from semantic. */
   removeNote(notePath: string): void {
     this.index.replaceNote(notePath, []);
+    this.lexical.removeNote(notePath);
     this.notePaths.delete(notePath);
+    // If a backfill is in flight, mark it so the attach loop won't resurrect this
+    // note from its pre-delete snapshot vectors.
+    if (this.indexing) this.dirtyDuringIndex.add(notePath);
     // Tombstone it in the persisted index (best-effort; a watcher remove must
     // never block or throw).
     void this.store?.deleteNote(notePath).catch(() => {});
   }
 
-  /** Retrieve grounding context for a query. Never throws (D12). */
+  /**
+   * Retrieve grounding context for a query. Never throws (D12).
+   *
+   * 3A: while a backfill is running (or before any vectors exist) the query
+   * takes the keyword path ONLY — a 1-item query embed must never queue behind a
+   * 128-chunk backfill batch on the single worker. Once the vectors are in and
+   * the index is idle, retrieval is semantic (5A: pure-vector in steady state;
+   * the lexical index stays as the during-backfill instant path and the merge
+   * seam for the deferred hybrid mode).
+   */
   ground(query: string): Promise<GroundingResult> {
-    return retrieve(this.embedder, this.index, query, this.options.retrieve ?? {});
+    const opts = this.options.retrieve ?? {};
+    if (this.indexing || this.index.size === 0) {
+      return Promise.resolve(retrieveLexical(this.lexical, query, opts));
+    }
+    return retrieve(this.embedder, this.index, query, opts);
   }
 }

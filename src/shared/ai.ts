@@ -111,9 +111,18 @@ export type GroundingUnavailableReason =
   | "embed-failed" // the query embedding failed
   | "no-matches"; // no chunk cleared the relevance threshold
 
-/** What the renderer needs to render the grounding badge on an answer. */
+/**
+ * How a grounded answer was retrieved (mirrors the grounding layer's mode).
+ * `keyword` = instant lexical/BM25 path used while embeddings backfill;
+ * `semantic` = vector cosine; `hybrid` = fusion of both (deferred RRF path).
+ */
+export type GroundingMode = "keyword" | "semantic" | "hybrid";
+
+/** What the renderer needs to render the grounding badge on an answer. The
+ *  `mode` lets the badge read "keyword match" vs "semantic" so the user knows
+ *  whether the fast or the deep index answered. */
 export type GroundingMeta =
-  | { grounded: true; sources: GroundingSource[] }
+  | { grounded: true; mode: GroundingMode; sources: GroundingSource[] }
   | { grounded: false; reason: GroundingUnavailableReason };
 
 export interface AiSendOptions {
@@ -183,8 +192,13 @@ export type AiSendResult =
 export type AiSetKeyResult = { ok: true } | { ok: false; error: SafeError };
 
 export interface GroundingStatus {
-  /** True once at least one chunk is indexed and ready to query. */
+  /** True once the vault is answerable — EITHER the instant lexical index OR the
+   *  vector index holds chunks. Lexical fills almost immediately, so this flips
+   *  true long before embedding finishes. */
   ready: boolean;
+  /** True once the vector (embedding) index holds chunks — i.e. semantic
+   *  retrieval is available, not just keyword. False during a cold backfill. */
+  semanticReady: boolean;
   /** A full re-index is currently running. */
   indexing: boolean;
   notes: number;
