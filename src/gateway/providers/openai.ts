@@ -1,5 +1,6 @@
 import { GatewayError } from "../errors.js";
 import type {
+  ChatMessage,
   ChatRequest,
   ChatResponse,
   ProviderAdapter,
@@ -39,13 +40,44 @@ function classifyError(status: number, body: string): GatewayError {
   return new GatewayError("BadResponse", { status });
 }
 
+/**
+ * Reconstruct OpenAI's message array from our ChatMessage list (6A).
+ * - assistant turns with `toolCalls` carry a `tool_calls` array (arguments is a
+ *   JSON STRING); content may be null on a pure tool call.
+ * - `role: "tool"` messages map to OpenAI's top-level `role: "tool"` keyed by
+ *   `tool_call_id`.
+ */
+function toOpenAIMessages(msgs: ChatMessage[]): Record<string, unknown>[] {
+  return msgs.map((m) => {
+    if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
+      return {
+        role: "assistant",
+        content: m.content.length > 0 ? m.content : null,
+        tool_calls: m.toolCalls.map((tc) => ({
+          id: tc.id,
+          type: "function",
+          function: {
+            name: tc.name,
+            arguments:
+              typeof tc.input === "string" ? tc.input : JSON.stringify(tc.input),
+          },
+        })),
+      };
+    }
+    if (m.role === "tool") {
+      return { role: "tool", tool_call_id: m.toolCallId, content: m.content };
+    }
+    return { role: m.role, content: m.content };
+  });
+}
+
 export const openaiAdapter: ProviderAdapter = {
   id: "openai",
 
   async send(req: ChatRequest, ctx: ProviderContext): Promise<ChatResponse> {
     const body: Record<string, unknown> = {
       model: req.model.model,
-      messages: req.messages.map((m) => ({ role: m.role, content: m.content })),
+      messages: toOpenAIMessages(req.messages),
     };
     if (req.maxTokens !== undefined) body.max_tokens = req.maxTokens;
     if (req.temperature !== undefined) body.temperature = req.temperature;

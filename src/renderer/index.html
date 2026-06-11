@@ -936,7 +936,8 @@
         text-overflow: ellipsis;
         white-space: nowrap;
       }
-      #index-btn {
+      #index-btn,
+      #agentic-toggle {
         flex-shrink: 0;
         border: none;
         background: transparent;
@@ -947,10 +948,12 @@
         border-radius: 8px;
         cursor: pointer;
       }
-      #index-btn:hover {
+      #index-btn:hover,
+      #agentic-toggle:hover {
         background: var(--hover);
       }
-      #index-btn.cta {
+      #index-btn.cta,
+      #agentic-toggle.on {
         background: var(--accent);
         color: #fff;
       }
@@ -1419,6 +1422,7 @@
         <div class="ground">
           <span class="gdot" id="ground-dot"></span>
           <span id="ground-state"></span>
+          <button id="agentic-toggle" title="Agentic retrieval: the model searches + reads your vault on demand (no embeddings). Spike — flip to compare against the embedding path.">Agentic: off</button>
           <button id="index-btn">Index your vault</button>
         </div>
 
