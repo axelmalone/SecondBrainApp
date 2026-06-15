@@ -90,15 +90,51 @@ function toAnthropicMessages(
   return out;
 }
 
+/** An Anthropic system content block; `cache_control` marks a cache breakpoint. */
+interface AnthropicSystemBlock {
+  type: "text";
+  text: string;
+  cache_control?: { type: "ephemeral" };
+}
+
+/** Anthropic caps a request at this many cache_control breakpoints. */
+const MAX_CACHE_BREAKPOINTS = 4;
+
+/**
+ * Build Anthropic's top-level `system` from our `role:"system"` messages.
+ *
+ * Returns null when there are no system messages. With NO cacheBreakpoint set,
+ * returns the joined STRING (today's behavior, unchanged). When ANY system
+ * message carries `cacheBreakpoint`, returns an ARRAY of `{type:"text"}` blocks
+ * and puts `cache_control: {type:"ephemeral"}` on each breakpoint block —
+ * Anthropic caches the prefix up to and including it. Respects the 4-breakpoint
+ * max (extra breakpoints are silently dropped rather than 400ing the request).
+ */
+function buildSystem(
+  systemMessages: ChatMessage[]
+): string | AnthropicSystemBlock[] | null {
+  if (systemMessages.length === 0) return null;
+  if (!systemMessages.some((m) => m.cacheBreakpoint)) {
+    return systemMessages.map((m) => m.content).join("\n\n");
+  }
+  let remaining = MAX_CACHE_BREAKPOINTS;
+  return systemMessages.map((m) => {
+    const block: AnthropicSystemBlock = { type: "text", text: m.content };
+    if (m.cacheBreakpoint && remaining > 0) {
+      block.cache_control = { type: "ephemeral" };
+      remaining--;
+    }
+    return block;
+  });
+}
+
 export const anthropicAdapter: ProviderAdapter = {
   id: "anthropic",
 
   async send(req: ChatRequest, ctx: ProviderContext): Promise<ChatResponse> {
     // Anthropic takes system separately from the message turns.
-    const system = req.messages
-      .filter((m) => m.role === "system")
-      .map((m) => m.content)
-      .join("\n\n");
+    const systemMessages = req.messages.filter((m) => m.role === "system");
+    const system = buildSystem(systemMessages);
     const messages = toAnthropicMessages(req.messages);
 
     const body: Record<string, unknown> = {
@@ -106,7 +142,7 @@ export const anthropicAdapter: ProviderAdapter = {
       max_tokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,
       messages,
     };
-    if (system.length > 0) body.system = system;
+    if (system !== null) body.system = system;
     if (req.temperature !== undefined) body.temperature = req.temperature;
     if (req.tools && req.tools.length > 0) {
       body.tools = req.tools.map((t) => ({

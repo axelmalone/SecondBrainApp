@@ -27,6 +27,17 @@ export interface ChatMessage {
    * `tool_call_id`). Set ONLY by the agentic loop.
    */
   toolCallId?: string;
+  /**
+   * Prompt-caching hint: "cache everything up to and including this message."
+   * Set on the LAST message of the STABLE prefix (policy + persona + goals) —
+   * the span that is byte-identical across every turn — so a provider can reuse
+   * it instead of reprocessing it each message. Provider-neutral: the Anthropic
+   * adapter turns this into a `cache_control: {type:"ephemeral"}` breakpoint;
+   * OpenAI caches automatically and ignores it. NEVER set it on a volatile
+   * message (active-note, recent-activity, grounding, conversation) — that would
+   * bust the cache every turn.
+   */
+  cacheBreakpoint?: boolean;
 }
 
 /**
