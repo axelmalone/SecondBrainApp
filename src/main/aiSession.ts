@@ -12,6 +12,8 @@ import { promises as fs } from "node:fs";
 import { createHash } from "node:crypto";
 import { GroundingService } from "../grounding/vaultIndexer.js";
 import { ChildProcessEmbedder } from "../grounding/childEmbedder.js";
+import { UtilityProcessEmbedder } from "./utilityEmbedder.js";
+import type { Embedder } from "../grounding/types.js";
 import { IndexStore } from "../grounding/indexStore.js";
 import { runAgenticTurn } from "../gateway/agenticTurn.js";
 import type { ToolContext, ToolSearchHit } from "../gateway/tools/registry.js";
@@ -54,7 +56,7 @@ import type {
 let keyStore: KeyStore | null = null;
 let gateway: ModelGateway | null = null;
 let grounder: GroundingService | null = null;
-let embedder: ChildProcessEmbedder | null = null;
+let embedder: DisposableEmbedder | null = null;
 /** App-private dir holding the per-vault persisted indexes (D16). */
 let groundingDir = "";
 /** The current vault's index store (null when no vault / no dir yet). */
@@ -98,31 +100,46 @@ function buildGrounder(root: string | null): void {
   }
 }
 
-/** How to spawn the embedder worker. Computed by the main bootstrap (which knows
- *  app.isPackaged) and injected via initAi, so this module stays Electron-light.
- *  Null until initAi runs → makeEmbedder falls back to the dev tsx+source path. */
-type EmbedderLaunch = { command: string; args: string[]; env?: NodeJS.ProcessEnv };
+/**
+ * How to spawn the embedder worker, injected by the main bootstrap (which knows
+ * app.isPackaged) so this module stays Electron-light. Two shapes:
+ *  - `utility`: a packaged build forks the compiled worker via Electron's
+ *    `utilityProcess` (the supported native-addon child; a raw ELECTRON_RUN_AS_NODE
+ *    spawn crashes onnxruntime under a real GUI launch).
+ *  - `tsx`: dev runs the .ts worker via tsx as a plain Node child over stdio.
+ * Null until initAi runs → makeEmbedder falls back to the dev tsx path.
+ */
+export type EmbedderLaunch =
+  | { kind: "utility"; modulePath: string; env: Record<string, string> }
+  | { kind: "tsx"; command: string; args: string[]; env?: NodeJS.ProcessEnv };
 let embedderLaunch: EmbedderLaunch | null = null;
 
+/** An embedder we can also tear down (vault switch / re-init). */
+type DisposableEmbedder = Embedder & { dispose(): void };
+
 /**
- * Build the embedder. The real model runs in a STOCK-NODE child process, NOT the
- * Electron main process — onnxruntime-node is a native addon that SIGTRAPs the
- * main process. Disposes any prior child first (vault switch).
- *
- * The launch spec is injected by the main bootstrap (initAi): in dev it spawns
- * the .ts worker via tsx; a packaged build spawns the Electron binary as Node
- * (ELECTRON_RUN_AS_NODE) running the compiled dist worker against the bundled
- * model. The dev path is the fallback when initAi hasn't supplied one.
+ * Build the embedder. The real model runs OUTSIDE the Electron main process —
+ * onnxruntime-node is a native addon that SIGTRAPs the main process. Disposes any
+ * prior child first (vault switch). The launch spec (injected via initAi) decides
+ * the transport: utilityProcess in a packaged build, tsx+stdio in dev.
  */
-function makeEmbedder(): ChildProcessEmbedder {
+function makeEmbedder(): DisposableEmbedder {
   embedder?.dispose();
   const launch = embedderLaunch ?? devEmbedderLaunch();
-  embedder = new ChildProcessEmbedder({
-    command: launch.command,
-    args: launch.args,
-    ...(launch.env ? { env: launch.env } : {}),
-    dimension: EMBED_DIMENSION,
-  });
+  if (launch.kind === "utility") {
+    embedder = new UtilityProcessEmbedder({
+      modulePath: launch.modulePath,
+      env: launch.env,
+      dimension: EMBED_DIMENSION,
+    });
+  } else {
+    embedder = new ChildProcessEmbedder({
+      command: launch.command,
+      args: launch.args,
+      ...(launch.env ? { env: launch.env } : {}),
+      dimension: EMBED_DIMENSION,
+    });
+  }
   return embedder;
 }
 
@@ -130,6 +147,7 @@ function makeEmbedder(): ChildProcessEmbedder {
 function devEmbedderLaunch(): EmbedderLaunch {
   const root = path.join(__dirname, "..", "..");
   return {
+    kind: "tsx",
     command: path.join(root, "node_modules", ".bin", "tsx"),
     args: [path.join(root, "src", "grounding", "embedderChild.ts")],
   };

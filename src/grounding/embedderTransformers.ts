@@ -4,6 +4,16 @@ import type { Embedder } from "./types.js";
 const MODEL_ID = "Xenova/all-MiniLM-L6-v2";
 const DIMENSION = 384;
 
+/**
+ * Texts per ONNX inference call. This is the INFERENCE batch, independent of the
+ * grounding layer's EMBED_BATCH (which controls progress granularity / how many
+ * chunks are handed to embed() at once). One inference call becomes a single
+ * padded tensor; under the WASM backend a large batch overruns memory and
+ * OrtRun throws (error 6), so we cap each call here and the indexer's larger
+ * batch is re-sliced transparently. Keep small for WASM safety.
+ */
+const INFERENCE_BATCH = 8;
+
 // Minimal shape of the bits of transformers.js we touch. The package is ESM and
 // heavy; we load it lazily via a non-literal dynamic import so the CommonJS main
 // build never has to statically resolve its ESM types, and so the ~90MB model
@@ -68,7 +78,18 @@ export class TransformersEmbedder implements Embedder {
   async embed(texts: string[]): Promise<number[][]> {
     if (texts.length === 0) return [];
     const extractor = await this.load();
-    const output = await extractor(texts, { pooling: "mean", normalize: true });
-    return output.tolist();
+    if (texts.length <= INFERENCE_BATCH) {
+      const output = await extractor(texts, { pooling: "mean", normalize: true });
+      return output.tolist();
+    }
+    // Re-slice to INFERENCE_BATCH-sized runs (WASM memory safety). Order is
+    // preserved: results are pushed in input order.
+    const out: number[][] = [];
+    for (let i = 0; i < texts.length; i += INFERENCE_BATCH) {
+      const slice = texts.slice(i, i + INFERENCE_BATCH);
+      const output = await extractor(slice, { pooling: "mean", normalize: true });
+      out.push(...output.tolist());
+    }
+    return out;
   }
 }
