@@ -127,9 +127,11 @@ export type GroundingUnavailableReason =
 /**
  * How a grounded answer was retrieved (mirrors the grounding layer's mode).
  * `keyword` = instant lexical/BM25 path used while embeddings backfill;
- * `semantic` = vector cosine; `hybrid` = fusion of both (deferred RRF path).
+ * `semantic` = vector cosine; `hybrid` = fusion of both (deferred RRF path);
+ * `agentic` = the model searched + opened notes itself via tools (the agentic
+ * loop), so the `sources` are the notes it actually read — honest provenance.
  */
-export type GroundingMode = "keyword" | "semantic" | "hybrid";
+export type GroundingMode = "keyword" | "semantic" | "hybrid" | "agentic";
 
 /** What the renderer needs to render the grounding badge on an answer. The
  *  `mode` lets the badge read "keyword match" vs "semantic" so the user knows

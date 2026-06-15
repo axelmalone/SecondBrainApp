@@ -470,10 +470,13 @@ async function aiSendAgentic(
       { ...req, messages: fullMessages },
       toolCtx
     );
+    // Honest provenance: the sources are the notes the model actually opened
+    // (read_note), reported under the `agentic` mode so the badge reads "opened"
+    // rather than mislabelling tool-driven exploration as a keyword match.
     const sources = [...new Set(readPaths)].map((notePath) => ({ notePath }));
     const grounding: GroundingMeta =
       sources.length > 0
-        ? { grounded: true, mode: "keyword", sources }
+        ? { grounded: true, mode: "agentic", sources }
         : { grounded: false, reason: "no-matches" };
     return finalizeTurn(parsed, response, grounding, opts);
   } catch (err) {
