@@ -25,6 +25,7 @@ import {
   resetGrounding,
   setLinkIndex,
   setProposalSink,
+  type EmbedderLaunch,
 } from "./aiSession.js";
 import { PERSONA_FILE } from "./personaContext.js";
 import { VaultWatcher } from "./vaultWatcher.js";
@@ -383,25 +384,36 @@ function registerIpc(): void {
 
 /**
  * How to spawn the embedder worker, by build mode (`__dirname` is dist/main).
- * - dev: run the .ts worker via the local tsx.
- * - packaged: run the Electron binary AS Node (ELECTRON_RUN_AS_NODE=1) against the
- *   compiled dist worker, pointed at the model bundled in app resources so the
- *   first index never hits the network (D17 — offline-first, on-brand).
+ * - packaged: fork the compiled worker via Electron's `utilityProcess` (the
+ *   supported way to run a native-addon Node child of a packaged app; a raw
+ *   ELECTRON_RUN_AS_NODE spawn sets the child up poorly and onnxruntime SIGTRAPs
+ *   under a real GUI launch). Pointed at the model bundled in app resources so
+ *   the first index never hits the network (D17). Minimal env — don't inherit
+ *   the launcher's (Finder/Conductor can inject native-resolution hints).
+ * - dev: run the .ts worker via the local tsx as a plain Node child over stdio.
  */
-function embedderLaunch(): { command: string; args: string[]; env?: NodeJS.ProcessEnv } {
+function embedderLaunch(): EmbedderLaunch {
   if (app.isPackaged) {
     return {
-      command: process.execPath,
-      args: [path.join(__dirname, "..", "grounding", "embedderChild.js")],
+      kind: "utility",
+      modulePath: path.join(__dirname, "..", "grounding", "embedderChild.js"),
       env: {
-        ...process.env,
-        ELECTRON_RUN_AS_NODE: "1",
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        HOME: process.env.HOME ?? "",
+        TMPDIR: process.env.TMPDIR ?? "/tmp",
         SB_MODEL_PATH: path.join(process.resourcesPath, "models"),
+        // Force the WASM onnxruntime backend: the native onnxruntime-node prebuilt
+        // SIGTRAPs under a packaged macOS LaunchServices launch. WASM computes the
+        // same embeddings with no native code. Point it at the bundled .wasm so it
+        // stays offline (no CDN fetch).
+        SB_FORCE_WASM: "1",
+        SB_WASM_PATH: path.join(process.resourcesPath, "wasm") + path.sep,
       },
     };
   }
   const root = path.join(__dirname, "..", "..");
   return {
+    kind: "tsx",
     command: path.join(root, "node_modules", ".bin", "tsx"),
     args: [path.join(root, "src", "grounding", "embedderChild.ts")],
   };

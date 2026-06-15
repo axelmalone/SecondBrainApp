@@ -1,0 +1,29 @@
+diff --git a/node_modules/@xenova/transformers/src/backends/onnx.js b/node_modules/@xenova/transformers/src/backends/onnx.js
+index 0bee3dc..a048f6f 100644
+--- a/node_modules/@xenova/transformers/src/backends/onnx.js
++++ b/node_modules/@xenova/transformers/src/backends/onnx.js
+@@ -29,7 +29,8 @@ export const executionProviders = [
+     'wasm'
+ ];
+ 
+-if (typeof process !== 'undefined' && process?.release?.name === 'node') {
++const SB_FORCE_WASM = typeof process !== 'undefined' && process?.env?.SB_FORCE_WASM === '1';
++if (!SB_FORCE_WASM && typeof process !== 'undefined' && process?.release?.name === 'node') {
+     // Running in a node-like environment.
+     ONNX = ONNX_NODE.default ?? ONNX_NODE;
+ 
+@@ -47,4 +48,14 @@ if (typeof process !== 'undefined' && process?.release?.name === 'node') {
+     if (isIOS) {
+         ONNX.env.wasm.simd = false;
+     }
++    // SB packaged app: single-threaded WASM (no SharedArrayBuffer/worker needed in
++    // Node) and load the .wasm from the bundled path instead of a CDN (offline).
++    if (SB_FORCE_WASM) {
++        // Robust WASM under Node: single-threaded (no SharedArrayBuffer) + no worker
++        // proxy. SIMD stays on (default) for speed. .wasm loaded from the bundled
++        // SB_WASM_PATH so the packaged app embeds fully offline.
++        ONNX.env.wasm.numThreads = 1;
++        ONNX.env.wasm.proxy = false;
++        if (process.env.SB_WASM_PATH) ONNX.env.wasm.wasmPaths = process.env.SB_WASM_PATH;
++    }
+ }

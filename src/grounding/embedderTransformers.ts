@@ -68,7 +68,21 @@ export class TransformersEmbedder implements Embedder {
   async embed(texts: string[]): Promise<number[][]> {
     if (texts.length === 0) return [];
     const extractor = await this.load();
-    const output = await extractor(texts, { pooling: "mean", normalize: true });
-    return output.tolist();
+    // Sub-batch so each inference call stays small. A large batch becomes one
+    // big padded tensor; under the WASM backend that overruns memory and OrtRun
+    // throws (error 6). Small sub-batches keep each run bounded and robust. The
+    // grounding layer's larger EMBED_BATCH still controls progress granularity.
+    const SUB_BATCH = 8;
+    if (texts.length <= SUB_BATCH) {
+      const output = await extractor(texts, { pooling: "mean", normalize: true });
+      return output.tolist();
+    }
+    const out: number[][] = [];
+    for (let i = 0; i < texts.length; i += SUB_BATCH) {
+      const slice = texts.slice(i, i + SUB_BATCH);
+      const output = await extractor(slice, { pooling: "mean", normalize: true });
+      out.push(...output.tolist());
+    }
+    return out;
   }
 }

@@ -16,7 +16,8 @@
     "dev": "npm run build && electron .",
     "start": "electron .",
     "fetch-model": "node scripts/fetch-model.mjs",
-    "package": "npm run build && npm run fetch-model && electron-builder --mac"
+    "package": "npm run build && npm run fetch-model && electron-builder --mac",
+    "postinstall": "patch-package"
   },
   "build": {
     "appId": "com.secondbrain.app",
@@ -32,16 +33,27 @@
       {
         "from": "resources/models",
         "to": "models"
+      },
+      {
+        "from": "node_modules/onnxruntime-web/dist",
+        "to": "wasm",
+        "filter": [
+          "*.wasm"
+        ]
       }
     ],
     "asarUnpack": [
       "**/node_modules/onnxruntime-node/**",
+      "**/node_modules/onnxruntime-web/**",
       "**/node_modules/@xenova/**",
       "**/node_modules/sharp/**"
     ],
     "mac": {
       "icon": "assets/icon.icns",
-      "target": ["dmg", "zip"],
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "category": "public.app-category.productivity",
       "identity": null
     }
@@ -56,6 +68,7 @@
     "@types/node": "^22.10.0",
     "electron": "^33.2.0",
     "electron-builder": "^26.15.3",
+    "patch-package": "^8.0.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
