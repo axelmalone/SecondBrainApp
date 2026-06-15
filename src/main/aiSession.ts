@@ -20,6 +20,7 @@ import type { ToolContext, ToolSearchHit } from "../gateway/tools/registry.js";
 import type { LinkIndex } from "./linkIndex.js";
 import { isInside } from "./vaultFiles.js";
 import { ElectronKeychain } from "./keychainElectron.js";
+import type { KeychainAdapter } from "../gateway/keychain.js";
 import {
   PersonaStore,
   RECENT_ACTIVITY_TITLES,
@@ -188,12 +189,15 @@ export async function initAi(opts: {
   /** How to spawn the embedder worker (dev tsx vs packaged Electron-as-Node).
    *  Omitted in tests/headless → makeEmbedder uses the dev fallback. */
   embedder?: EmbedderLaunch;
+  /** The OS keychain adapter. Defaults to the Electron safeStorage adapter;
+   *  tests inject an in-memory one to exercise the auth boundary headlessly. */
+  keychain?: KeychainAdapter;
 }): Promise<void> {
   try {
     groundingDir = opts.groundingDir;
     embedderLaunch = opts.embedder ?? null;
     personaStore = new PersonaStore(opts.personaDir);
-    const keychain = new ElectronKeychain(opts.keychainBlobPath);
+    const keychain = opts.keychain ?? new ElectronKeychain(opts.keychainBlobPath);
     keyStore = await KeyStore.open({ path: opts.keysPath, keychain });
     const logger = createScrubbingLogger(() => keyStore?.secrets() ?? []);
     gateway = new ModelGateway({
