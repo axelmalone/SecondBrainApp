@@ -15,8 +15,15 @@ type Extractor = (
   texts: string[],
   opts: { pooling: "mean"; normalize: boolean }
 ) => Promise<FeatureTensor>;
+/** The subset of transformers.js `env` we configure to bundle the model. */
+interface TransformersEnv {
+  localModelPath: string;
+  allowRemoteModels: boolean;
+  allowLocalModels: boolean;
+}
 interface TransformersModule {
   pipeline(task: "feature-extraction", model: string): Promise<Extractor>;
+  env: TransformersEnv;
 }
 
 // @xenova/transformers is ESM-only. Under the CommonJS main build, TypeScript
@@ -41,7 +48,19 @@ export class TransformersEmbedder implements Embedder {
     if (!this.extractor) {
       this.extractor = (
         dynamicImport("@xenova/transformers") as Promise<TransformersModule>
-      ).then((mod) => mod.pipeline("feature-extraction", MODEL_ID));
+      ).then((mod) => {
+        // Packaged build (D17): SB_MODEL_PATH points at the model bundled in app
+        // resources. Pin transformers to it and forbid remote fetches, so the
+        // first index works fully offline and nothing is downloaded. In dev the
+        // var is unset → default behavior (download once to the HF cache).
+        const local = process.env.SB_MODEL_PATH;
+        if (local) {
+          mod.env.localModelPath = local;
+          mod.env.allowLocalModels = true;
+          mod.env.allowRemoteModels = false;
+        }
+        return mod.pipeline("feature-extraction", MODEL_ID);
+      });
     }
     return this.extractor;
   }

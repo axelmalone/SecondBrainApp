@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "AI-native, local-first second brain — M1 vault I/O layer",
+  "author": "Axel Malone",
   "main": "dist/main/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.renderer.json && tsc -p tsconfig.main.json && cp src/renderer/index.html dist/renderer/index.html && mkdir -p dist/renderer/fonts && cp src/renderer/fonts/*.woff2 dist/renderer/fonts/",
@@ -13,7 +14,36 @@
     "eval:grounding:compare": "tsx eval/grounding/sidebyside.ts",
     "eval:proposals": "tsx eval/proposals/run.ts",
     "dev": "npm run build && electron .",
-    "start": "electron ."
+    "start": "electron .",
+    "fetch-model": "node scripts/fetch-model.mjs",
+    "package": "npm run build && npm run fetch-model && electron-builder --mac"
+  },
+  "build": {
+    "appId": "com.secondbrain.app",
+    "productName": "Second Brain",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/models",
+        "to": "models"
+      }
+    ],
+    "asarUnpack": [
+      "**/node_modules/onnxruntime-node/**",
+      "**/node_modules/@xenova/**",
+      "**/node_modules/sharp/**"
+    ],
+    "mac": {
+      "target": ["dmg", "zip"],
+      "category": "public.app-category.productivity",
+      "identity": null
+    }
   },
   "dependencies": {
     "@automerge/automerge": "^2.2.8",
@@ -24,6 +54,7 @@
     "@types/markdown-it": "^14.1.2",
     "@types/node": "^22.10.0",
     "electron": "^33.2.0",
+    "electron-builder": "^26.15.3",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
