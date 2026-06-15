@@ -40,6 +40,7 @@
       "**/node_modules/sharp/**"
     ],
     "mac": {
+      "icon": "assets/icon.icns",
       "target": ["dmg", "zip"],
       "category": "public.app-category.productivity",
       "identity": null
