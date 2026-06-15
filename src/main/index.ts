@@ -10,6 +10,7 @@ import {
   aiSetKey,
   aiStatus,
   assistantBootstrap,
+  ensureKeywordIndex,
   groundingHasSavedIndex,
   initAi,
   markPersonaEdited,
@@ -167,17 +168,42 @@ function rebuildIndexes(root: string): void {
   void searchIndex.build(root).catch(() => {});
 }
 
+/** Delay before a first-run / new-vault cold index kicks off, so the heavy embed
+ *  never competes with the launch / vault-switch burst. The user works against
+ *  the instant lexical (agentic) path meanwhile and shouldn't feel the machine. */
+const COLD_INDEX_DELAY_MS = 4_000;
+
+/** A pending cold index, so a fast vault switch cancels the previous one rather
+ *  than indexing a vault the user has already left. */
+let coldIndexTimer: ReturnType<typeof setTimeout> | null = null;
+
 /**
- * Point the grounder at `root`'s persistent index (D16). If a saved index
- * exists, auto-reconcile in the background — reuse saved vectors, re-embed only
- * changed notes — so grounding is ready without an explicit re-index. With no
- * saved index (first time / new vault), do nothing: the user clicks "Index".
+ * Point the grounder at `root`'s persistent index (D16) and auto-start indexing
+ * in the background — no manual "Index" button. A saved index reconciles right
+ * away (cheap: reuse saved vectors, re-embed only changed notes). A first run /
+ * new vault gets a full cold index, but DEFERRED a few seconds so it stays out
+ * of the launch burst. Either way the embed runs in a low-priority (nice 10)
+ * child and agentic/keyword search is live immediately, so grounding is usable
+ * before this finishes and the user shouldn't notice their machine working.
  * reconcile reads the vault but never writes to it, so no watcher suppression.
  */
 async function activateGroundingFor(root: string): Promise<void> {
+  if (coldIndexTimer) {
+    clearTimeout(coldIndexTimer);
+    coldIndexTimer = null;
+  }
   resetGrounding(root);
+  // Build the keyword (BM25) index right away — cheap, no model — so agentic
+  // search is live within seconds, before any embedding work begins.
+  void ensureKeywordIndex(root).catch(() => {});
   if (await groundingHasSavedIndex()) {
     void reconcileGrounding(root).catch(() => {});
+  } else {
+    coldIndexTimer = setTimeout(() => {
+      coldIndexTimer = null;
+      void reconcileGrounding(root).catch(() => {});
+    }, COLD_INDEX_DELAY_MS);
+    coldIndexTimer.unref?.();
   }
 }
 

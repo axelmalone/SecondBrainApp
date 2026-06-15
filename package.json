@@ -10,6 +10,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "eval:grounding": "tsx eval/grounding/run.ts",
+    "eval:grounding:compare": "tsx eval/grounding/sidebyside.ts",
     "eval:proposals": "tsx eval/proposals/run.ts",
     "dev": "npm run build && electron .",
     "start": "electron ."

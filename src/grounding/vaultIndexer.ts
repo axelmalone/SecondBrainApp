@@ -462,6 +462,24 @@ export class GroundingService {
   }
 
   /**
+   * Semantic (embedding) search over the vault — the `deep_search` tool engine.
+   * Returns `null` when the vector index isn't usable yet (no vectors / still
+   * cold-backfilling / the query embed failed), so the agentic tool can tell the
+   * model to fall back to keyword search; `[]` means it ran and matched nothing.
+   * Reuses the D9 `retrieve` path (and its minScore honesty gate); embedding the
+   * one query is cheap and queues behind any in-flight backfill on the shared
+   * worker. Never throws.
+   */
+  async searchSemantic(query: string, k: number): Promise<ScoredChunk[] | null> {
+    if (this.index.size === 0) return null; // no vectors yet → caller falls back
+    const result = await retrieve(this.embedder, this.index, query, { k });
+    if (result.status === "grounded") return result.chunks;
+    // no-matches → ran cleanly, nothing relevant ([]); empty-index/embed-failed
+    // → semantic not usable (null) so the model uses keyword search instead.
+    return result.reason === "no-matches" ? [] : null;
+  }
+
+  /**
    * Build ONLY the lexical (BM25) index if it isn't already populated — the
    * agentic path needs keyword search but NOT embeddings, so this is the cheap,
    * no-model, no-embed build (chunk every note, add to the lexical index). A
