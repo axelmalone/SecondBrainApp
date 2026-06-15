@@ -7,10 +7,16 @@ import type { Embedder } from "./types.js";
 type Worker = ChildProcessByStdio<Writable, Readable, null>;
 
 export interface ChildEmbedderSpec {
-  /** Executable to spawn (e.g. the tsx bin). */
+  /** Executable to spawn (e.g. the tsx bin in dev, or the Electron binary run as
+   *  Node in a packaged build). */
   command: string;
-  /** Args (e.g. [path/to/embedderChild.ts]). */
+  /** Args (e.g. [path/to/embedderChild.ts] in dev, [.../embedderChild.js] packaged). */
   args: string[];
+  /** Environment for the child. When omitted, the child inherits the parent's
+   *  env (the dev default). A packaged build passes `ELECTRON_RUN_AS_NODE=1` (so
+   *  the Electron binary behaves as stock Node) and the bundled model path. The
+   *  caller MUST spread `process.env` in — this REPLACES the environment. */
+  env?: NodeJS.ProcessEnv;
   /** Embedding dimensionality (must match the model). */
   dimension: number;
   /** OS nice value for the worker (0..19; higher = lower priority). Keeps a busy
@@ -123,6 +129,9 @@ export class ChildProcessEmbedder implements Embedder {
       try {
         child = spawn(this.spec.command, this.spec.args, {
           stdio: ["pipe", "pipe", "inherit"], // stderr → our terminal for logs/progress
+          // Omitted env → child inherits process.env (dev default). A packaged
+          // build passes a full env (process.env + ELECTRON_RUN_AS_NODE + model path).
+          ...(this.spec.env ? { env: this.spec.env } : {}),
         });
       } catch (err) {
         this.ready = null;

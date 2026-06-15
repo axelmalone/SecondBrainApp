@@ -1,6 +1,8 @@
 node_modules/
 dist/
 build/
+release/
+resources/models/
 .DS_Store
 keys.enc
 *.local

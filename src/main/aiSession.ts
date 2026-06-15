@@ -98,27 +98,41 @@ function buildGrounder(root: string | null): void {
   }
 }
 
+/** How to spawn the embedder worker. Computed by the main bootstrap (which knows
+ *  app.isPackaged) and injected via initAi, so this module stays Electron-light.
+ *  Null until initAi runs → makeEmbedder falls back to the dev tsx+source path. */
+type EmbedderLaunch = { command: string; args: string[]; env?: NodeJS.ProcessEnv };
+let embedderLaunch: EmbedderLaunch | null = null;
+
 /**
- * Build the embedder. The real model runs in a STOCK-NODE child process (via
- * tsx), NOT the Electron main process — onnxruntime-node is a native addon that
- * SIGTRAPs the main process. Disposes any prior child first (vault switch).
+ * Build the embedder. The real model runs in a STOCK-NODE child process, NOT the
+ * Electron main process — onnxruntime-node is a native addon that SIGTRAPs the
+ * main process. Disposes any prior child first (vault switch).
  *
- * NOTE (D17 / eventual packaged-build fix): this spawns the .ts worker via tsx,
- * which only exists in dev. A packaged build can't rely on tsx or src/ — it must
- * bundle the model + onnxruntime and fork compiled JS (or use a utilityProcess).
+ * The launch spec is injected by the main bootstrap (initAi): in dev it spawns
+ * the .ts worker via tsx; a packaged build spawns the Electron binary as Node
+ * (ELECTRON_RUN_AS_NODE) running the compiled dist worker against the bundled
+ * model. The dev path is the fallback when initAi hasn't supplied one.
  */
 function makeEmbedder(): ChildProcessEmbedder {
   embedder?.dispose();
-  // __dirname is <root>/dist/main at runtime.
-  const root = path.join(__dirname, "..", "..");
-  const tsx = path.join(root, "node_modules", ".bin", "tsx");
-  const child = path.join(root, "src", "grounding", "embedderChild.ts");
+  const launch = embedderLaunch ?? devEmbedderLaunch();
   embedder = new ChildProcessEmbedder({
-    command: tsx,
-    args: [child],
+    command: launch.command,
+    args: launch.args,
+    ...(launch.env ? { env: launch.env } : {}),
     dimension: EMBED_DIMENSION,
   });
   return embedder;
+}
+
+/** Dev fallback: run the .ts worker via the local tsx. `__dirname` is dist/main. */
+function devEmbedderLaunch(): EmbedderLaunch {
+  const root = path.join(__dirname, "..", "..");
+  return {
+    command: path.join(root, "node_modules", ".bin", "tsx"),
+    args: [path.join(root, "src", "grounding", "embedderChild.ts")],
+  };
 }
 
 /**
@@ -153,9 +167,13 @@ export async function initAi(opts: {
   keychainBlobPath: string;
   groundingDir: string;
   personaDir: string;
+  /** How to spawn the embedder worker (dev tsx vs packaged Electron-as-Node).
+   *  Omitted in tests/headless → makeEmbedder uses the dev fallback. */
+  embedder?: EmbedderLaunch;
 }): Promise<void> {
   try {
     groundingDir = opts.groundingDir;
+    embedderLaunch = opts.embedder ?? null;
     personaStore = new PersonaStore(opts.personaDir);
     const keychain = new ElectronKeychain(opts.keychainBlobPath);
     keyStore = await KeyStore.open({ path: opts.keysPath, keychain });

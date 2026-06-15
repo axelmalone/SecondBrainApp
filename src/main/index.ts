@@ -381,6 +381,32 @@ function registerIpc(): void {
   ipcMain.handle("chat:delete", (_e, id: string) => chatDelete(id));
 }
 
+/**
+ * How to spawn the embedder worker, by build mode (`__dirname` is dist/main).
+ * - dev: run the .ts worker via the local tsx.
+ * - packaged: run the Electron binary AS Node (ELECTRON_RUN_AS_NODE=1) against the
+ *   compiled dist worker, pointed at the model bundled in app resources so the
+ *   first index never hits the network (D17 — offline-first, on-brand).
+ */
+function embedderLaunch(): { command: string; args: string[]; env?: NodeJS.ProcessEnv } {
+  if (app.isPackaged) {
+    return {
+      command: process.execPath,
+      args: [path.join(__dirname, "..", "grounding", "embedderChild.js")],
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: "1",
+        SB_MODEL_PATH: path.join(process.resourcesPath, "models"),
+      },
+    };
+  }
+  const root = path.join(__dirname, "..", "..");
+  return {
+    command: path.join(root, "node_modules", ".bin", "tsx"),
+    args: [path.join(root, "src", "grounding", "embedderChild.ts")],
+  };
+}
+
 app.whenReady().then(async () => {
   vaultConfigPath = path.join(app.getPath("userData"), "vault.json");
 
@@ -392,6 +418,7 @@ app.whenReady().then(async () => {
     groundingDir: path.join(app.getPath("userData"), "grounding"),
     // Per-vault Settings persona fallback (1A): app-private, OUTSIDE the vault.
     personaDir: path.join(app.getPath("userData"), "persona"),
+    embedder: embedderLaunch(),
   });
 
   // Durable multi-chat store (D14): app-private, OUTSIDE the vault.
