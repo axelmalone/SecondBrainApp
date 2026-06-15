@@ -3,12 +3,16 @@ import {
   AGENTIC_TOOLS,
   READ_NOTE_CAP,
   type ToolContext,
+  type ToolNoteRef,
   type ToolSearchHit,
 } from "../src/gateway/tools/registry.js";
 
 const search_vault = AGENTIC_TOOLS.search_vault!;
 const deep_search = AGENTIC_TOOLS.deep_search!;
 const read_note = AGENTIC_TOOLS.read_note!;
+const backlinks = AGENTIC_TOOLS.backlinks!;
+const follow_links = AGENTIC_TOOLS.follow_links!;
+const list_recent = AGENTIC_TOOLS.list_recent!;
 
 /** A ToolContext stub: an in-memory vault keyed by absolute path. resolvePath
  *  applies the .md + "inside vault" guard the real wiring backs with isInside. */
@@ -89,6 +93,61 @@ describe("deep_search (semantic)", () => {
     const ctx = stubCtx({}, { semanticSearch: async () => [] });
     await expect(deep_search.run({ query: "  " }, ctx)).rejects.toThrow(/non-empty/);
     await expect(deep_search.run({}, ctx)).rejects.toThrow(/query/);
+  });
+});
+
+describe("graph + recency tools", () => {
+  it("backlinks lists linking notes; empty + missing-index + validation handled", async () => {
+    const ctx = stubCtx(
+      {},
+      {
+        backlinks: (p) =>
+          p === "/vault/a.md" ? [{ notePath: "/vault/b.md", name: "b" }] : [],
+      }
+    );
+    expect(await backlinks.run({ path: "/vault/a.md" }, ctx)).toContain("/vault/b.md");
+    expect(await backlinks.run({ path: "/vault/lonely.md" }, ctx)).toContain("No notes link to");
+    await expect(backlinks.run({}, ctx)).rejects.toThrow(/path/);
+    // No backlinks capability wired → reports unavailable, never throws.
+    expect(await backlinks.run({ path: "/vault/a.md" }, stubCtx({}))).toMatch(/unavailable/);
+  });
+
+  it("follow_links lists outgoing targets and flags dangling ones", async () => {
+    const ctx = stubCtx(
+      {},
+      {
+        outgoingLinks: () => [
+          { name: "real", notePath: "/vault/real.md" },
+          { name: "ghost" },
+        ],
+      }
+    );
+    const out = await follow_links.run({ path: "/vault/a.md" }, ctx);
+    expect(out).toContain("/vault/real.md");
+    expect(out).toContain("ghost (no such note in vault)");
+  });
+
+  it("list_recent clamps the limit, defaults to 10, handles empty", async () => {
+    const recents = Array.from({ length: 30 }, (_, i) => ({
+      notePath: `/vault/n${i}.md`,
+      name: `n${i}`,
+    }));
+    let asked = -1;
+    const ctx = stubCtx(
+      {},
+      {
+        recentNotes: async (limit: number): Promise<ToolNoteRef[]> => {
+          asked = limit;
+          return recents.slice(0, limit);
+        },
+      }
+    );
+    await list_recent.run({ limit: 100 }, ctx);
+    expect(asked).toBe(25); // clamped to the cap
+    await list_recent.run({}, ctx);
+    expect(asked).toBe(10); // default
+    const empty = stubCtx({}, { recentNotes: async () => [] });
+    expect(await list_recent.run({}, empty)).toContain("No notes in the vault");
   });
 });
 
