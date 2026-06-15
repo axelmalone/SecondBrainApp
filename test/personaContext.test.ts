@@ -69,7 +69,12 @@ describe("assemblePersona (ordering + fallback + cap)", () => {
   it("with no persona text → base persona ALONE", () => {
     const msgs = assemblePersona(null);
     expect(msgs).toHaveLength(1);
-    expect(msgs[0]).toEqual(basePersonaMessage());
+    // Same content as the base persona, plus the cache breakpoint marker (the
+    // base persona is the last stable block when there's no profile).
+    expect({ ...msgs[0], cacheBreakpoint: undefined }).toEqual({
+      ...basePersonaMessage(),
+      cacheBreakpoint: undefined,
+    });
   });
 
   it("treats blank/whitespace as no persona → base alone", () => {
@@ -100,6 +105,20 @@ describe("assemblePersona (ordering + fallback + cap)", () => {
     // The injected x-run must not exceed the cap.
     const run = body.match(/x+/)?.[0] ?? "";
     expect(run.length).toBeLessThanOrEqual(PERSONA_MAX_CHARS);
+  });
+
+  it("marks the cache breakpoint on the PERSONA message when a profile exists", () => {
+    const msgs = assemblePersona("I am a founder.");
+    const marked = msgs.filter((m) => m.cacheBreakpoint);
+    expect(marked).toHaveLength(1);
+    expect(marked[0]).toBe(msgs[1]); // the profile message, not the base
+  });
+
+  it("marks the cache breakpoint on the BASE persona when there's no profile", () => {
+    const msgs = assemblePersona(null);
+    const marked = msgs.filter((m) => m.cacheBreakpoint);
+    expect(marked).toHaveLength(1);
+    expect(marked[0]).toBe(msgs[0]);
   });
 });
 
@@ -282,6 +301,25 @@ describe("assembleTurnMessages (locked ordering)", () => {
       conversation,
     });
     expect(out.map((x) => x.content)).toEqual(["policy", "base", "hi"]);
+  });
+
+  it("carries EXACTLY ONE cache breakpoint, on the last stable block, never volatile", () => {
+    const out = assembleTurnMessages({
+      policy,
+      persona: assemblePersona("I am a founder."), // marks the profile message
+      activeNote: m("active (volatile)"),
+      recentActivity: m("recent (volatile)"),
+      grounding: [m("ground (volatile)")],
+      conversation,
+    });
+    const marked = out.filter((x) => x.cacheBreakpoint);
+    expect(marked).toHaveLength(1);
+    // It's the persona/profile message — and everything AFTER it is volatile.
+    const idx = out.findIndex((x) => x.cacheBreakpoint);
+    expect(marked[0]!.content).toContain("I am a founder.");
+    for (const later of out.slice(idx + 1)) {
+      expect(later.cacheBreakpoint).toBeFalsy();
+    }
   });
 });
 

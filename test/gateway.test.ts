@@ -5,7 +5,11 @@ import { KeyStore } from "../src/gateway/keyStore.js";
 import { InMemoryKeychain } from "../src/gateway/keychain.js";
 import { anthropicAdapter } from "../src/gateway/providers/anthropic.js";
 import { openaiAdapter } from "../src/gateway/providers/openai.js";
-import type { FetchLike, ProviderAdapter } from "../src/gateway/types.js";
+import type {
+  FetchLike,
+  ProviderAdapter,
+  ProviderContext,
+} from "../src/gateway/types.js";
 import type { ChatRequest } from "../src/shared/ai.js";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
@@ -276,6 +280,86 @@ describe("provider error mapping — openai", () => {
     const res = await gw.call(oReq);
     expect(res.text).toBe("hey");
     expect(res.usage).toEqual({ inputTokens: 5, outputTokens: 2 });
+  });
+});
+
+describe("anthropic adapter — system + prompt caching", () => {
+  /** A fetch that records each parsed request body and returns a fixed OK. */
+  function capturingFetch(): { fetch: FetchLike; bodies: any[] } {
+    const bodies: any[] = [];
+    const fetch: FetchLike = async (_url, init) => {
+      bodies.push(JSON.parse(init.body as string));
+      return new Response(anthropicOk, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    return { fetch, bodies };
+  }
+
+  const ctxFor = (fetch: FetchLike): ProviderContext => ({
+    apiKey: "sk-test",
+    fetch,
+    signal: new AbortController().signal,
+  });
+
+  it("emits system as an ARRAY with cache_control on exactly the breakpoint block", async () => {
+    const { fetch, bodies } = capturingFetch();
+    const request: ChatRequest = {
+      model: { provider: "anthropic", model: "claude-3-5-sonnet-20241022" },
+      messages: [
+        { role: "system", content: "POLICY" },
+        { role: "system", content: "PERSONA", cacheBreakpoint: true },
+        { role: "system", content: "GROUNDING (volatile)" },
+        { role: "user", content: "hi" },
+      ],
+    };
+    await anthropicAdapter.send(request, ctxFor(fetch));
+
+    const system = bodies[0].system;
+    expect(Array.isArray(system)).toBe(true);
+    expect(system).toEqual([
+      { type: "text", text: "POLICY" },
+      { type: "text", text: "PERSONA", cache_control: { type: "ephemeral" } },
+      { type: "text", text: "GROUNDING (volatile)" },
+    ]);
+    // The breakpoint is on the persona block ONLY — volatile grounding (which
+    // renders after it) carries no cache_control, so it stays out of the prefix.
+    const withControl = system.filter((b: any) => b.cache_control);
+    expect(withControl).toHaveLength(1);
+    expect(withControl[0].text).toBe("PERSONA");
+  });
+
+  it("keeps system as a joined STRING when no breakpoint is set (unchanged)", async () => {
+    const { fetch, bodies } = capturingFetch();
+    const request: ChatRequest = {
+      model: { provider: "anthropic", model: "claude-3-5-sonnet-20241022" },
+      messages: [
+        { role: "system", content: "POLICY" },
+        { role: "system", content: "PERSONA" },
+        { role: "user", content: "hi" },
+      ],
+    };
+    await anthropicAdapter.send(request, ctxFor(fetch));
+    expect(bodies[0].system).toBe("POLICY\n\nPERSONA");
+  });
+
+  it("never emits more than 4 cache_control breakpoints", async () => {
+    const { fetch, bodies } = capturingFetch();
+    const request: ChatRequest = {
+      model: { provider: "anthropic", model: "claude-3-5-sonnet-20241022" },
+      messages: [
+        ...Array.from({ length: 6 }, (_v, i) => ({
+          role: "system" as const,
+          content: `S${i}`,
+          cacheBreakpoint: true,
+        })),
+        { role: "user", content: "hi" },
+      ],
+    };
+    await anthropicAdapter.send(request, ctxFor(fetch));
+    const withControl = bodies[0].system.filter((b: any) => b.cache_control);
+    expect(withControl).toHaveLength(4);
   });
 });
 
