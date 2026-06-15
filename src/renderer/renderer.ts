@@ -972,9 +972,15 @@ function makeBadge(grounding: GroundingMeta): HTMLSpanElement {
   if (grounding.grounded) {
     const names = uniqueNoteNames(grounding.sources).join(", ");
     badge.className = "badge grounded";
-    // Honest per-answer mode (2A): "keyword match" while the deep index is still
-    // backfilling, "grounded" once semantic retrieval answered.
-    const label = grounding.mode === "keyword" ? "keyword match" : "grounded";
+    // Honest per-answer mode (2A): "opened" when the agentic loop read the notes
+    // itself, "keyword match" while the deep index is still backfilling,
+    // "grounded" once semantic retrieval answered.
+    const label =
+      grounding.mode === "agentic"
+        ? "opened"
+        : grounding.mode === "keyword"
+          ? "keyword match"
+          : "grounded";
     badge.textContent = `${label} · ${names}`;
   } else {
     badge.className = "badge ungrounded";

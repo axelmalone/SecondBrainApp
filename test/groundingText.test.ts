@@ -30,6 +30,21 @@ describe("groundingAnnouncement (D12 aria-live wording)", () => {
     expect(groundingAnnouncement(g)).toBe("Answer grounded in your vault.");
   });
 
+  it("speaks agentic mode as 'opened' provenance", () => {
+    const named: GroundingMeta = {
+      grounded: true,
+      mode: "agentic",
+      sources: [src("Sourdough.md"), src("Retirement.md")],
+    };
+    expect(groundingAnnouncement(named)).toBe(
+      "Answer based on 2 notes I opened: Sourdough, Retirement."
+    );
+    const one: GroundingMeta = { grounded: true, mode: "agentic", sources: [src("Daily.md")] };
+    expect(groundingAnnouncement(one)).toBe("Answer based on 1 note I opened: Daily.");
+    const none: GroundingMeta = { grounded: true, mode: "agentic", sources: [] };
+    expect(groundingAnnouncement(none)).toBe("Answer based on notes I opened in your vault.");
+  });
+
   it("speaks keyword mode distinctly so the deep index isn't implied", () => {
     const named: GroundingMeta = {
       grounded: true,

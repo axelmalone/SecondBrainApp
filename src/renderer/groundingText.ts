@@ -42,6 +42,14 @@ export function uniqueNoteNames(sources: readonly GroundingSource[]): string[] {
 export function groundingAnnouncement(grounding: GroundingMeta): string {
   if (grounding.grounded) {
     const names = uniqueNoteNames(grounding.sources);
+    const plural = names.length === 1 ? "" : "s";
+    // Agentic mode: the model opened the notes itself — speak the honest "opened"
+    // provenance, matching the visual badge.
+    if (grounding.mode === "agentic") {
+      return names.length === 0
+        ? "Answer based on notes I opened in your vault."
+        : `Answer based on ${names.length} note${plural} I opened: ${names.join(", ")}.`;
+    }
     // Keyword mode (the instant lexical path used while embeddings backfill) is
     // spoken differently so a screen-reader user hears that the answer came from
     // a keyword match, not the deeper semantic index — the same honesty the
@@ -53,7 +61,7 @@ export function groundingAnnouncement(grounding: GroundingMeta): string {
         : "Answer grounded in your vault.";
     }
     const lead = keyword ? "Answer drawn from a keyword match in" : "Answer grounded in";
-    return `${lead} ${names.length} note${names.length === 1 ? "" : "s"}: ${names.join(", ")}.`;
+    return `${lead} ${names.length} note${plural}: ${names.join(", ")}.`;
   }
   return `Answering without vault context: ${UNGROUNDED_REASON[grounding.reason]}.`;
 }
