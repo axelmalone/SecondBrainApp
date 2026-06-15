@@ -52,6 +52,20 @@ describe("LinkIndex — backlinks", () => {
     idx.removeNote(a);
     expect(idx.backlinksFor(target)).toHaveLength(0);
   });
+
+  it("resolves outgoing links to note paths, flagging dangling targets", async () => {
+    vault = await makeTempVault();
+    const a = await writeNote(vault, "A.md", "see [[Target]] and [[Ghost]]");
+    const target = await writeNote(vault, "Target.md", "# Target\n");
+    const idx = new LinkIndex();
+    await idx.build(vault);
+
+    const out = idx.outgoingFor(a);
+    const byName = Object.fromEntries(out.map((t) => [t.name, t.path]));
+    expect(byName["target"]).toBe(target); // resolved to the real note
+    expect(byName["ghost"]).toBeNull(); // dangling — no such note
+    expect(idx.outgoingFor(target)).toEqual([]); // Target links to nothing
+  });
 });
 
 describe("SearchIndex — full-text", () => {

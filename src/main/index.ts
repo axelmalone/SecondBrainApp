@@ -23,6 +23,7 @@ import {
   reindexNote,
   removeNoteFromIndex,
   resetGrounding,
+  setLinkIndex,
   setProposalSink,
 } from "./aiSession.js";
 import { PERSONA_FILE } from "./personaContext.js";
@@ -407,6 +408,8 @@ app.whenReady().then(async () => {
   });
   // A parsed proposal from a chat turn is persisted here (and security-checked).
   setProposalSink((draft, backref) => proposals!.create(draft, backref));
+  // Share the live wikilink graph with the agentic backlinks/follow_links tools.
+  setLinkIndex(linkIndex);
   // 7A crash recovery + 1A compaction: verify-then-reconcile any interrupted
   // apply, then archive resolved proposals. Never throws → never blocks launch.
   await proposals.recoverOnLaunch().catch(() => {});

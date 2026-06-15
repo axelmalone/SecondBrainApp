@@ -37,6 +37,19 @@ export interface ToolContext {
    *  the open note so the model sees unsaved edits (matches the active-note path). */
   activeNotePath?: string;
   activeNoteText?: string;
+  /** Notes that link TO a given note (reverse wikilinks) — the backlinks tool. */
+  backlinks?(notePath: string): ToolNoteRef[];
+  /** Notes a given note links TO (outgoing wikilinks) — the follow_links tool.
+   *  `notePath` is omitted for a dangling link to a note that doesn't exist. */
+  outgoingLinks?(notePath: string): { name: string; notePath?: string }[];
+  /** The most-recently-edited notes, newest first — the list_recent tool. */
+  recentNotes?(limit: number): Promise<ToolNoteRef[]>;
+}
+
+/** A note reference (path + display name) returned by the graph/recent tools. */
+export interface ToolNoteRef {
+  notePath: string;
+  name: string;
 }
 
 /** A registered tool: its provider-neutral spec + a runner that returns the
@@ -75,6 +88,26 @@ function requireQuery(input: unknown, tool: string): string {
     throw new Error(`${tool} requires a non-empty 'query' string.`);
   }
   return query;
+}
+
+/** Validate + extract a non-empty `path` string from a tool's input. */
+function requirePath(input: unknown, tool: string): string {
+  const p = asObject(input).path;
+  if (typeof p !== "string" || p.length === 0) {
+    throw new Error(`${tool} requires a 'path' string.`);
+  }
+  return p;
+}
+
+/** Format a list of note references as a numbered path list the model can feed
+ *  back into read_note. A reference with no path (a dangling wikilink) is shown
+ *  as the bare name so the model knows the target note doesn't exist. */
+function formatRefs(refs: { name: string; notePath?: string }[]): string {
+  return refs
+    .map((r, i) =>
+      r.notePath ? `[${i + 1}] ${r.notePath}` : `[${i + 1}] ${r.name} (no such note in vault)`
+    )
+    .join("\n");
 }
 
 const searchVault: Tool = {
@@ -200,11 +233,80 @@ const readNote: Tool = {
   },
 };
 
+const backlinks: Tool = {
+  spec: {
+    name: "backlinks",
+    description:
+      "List the notes that link TO a given note (its backlinks / reverse " +
+      "wikilinks) — what in the vault references it. Pass the note's path (as " +
+      "shown in search results); then read_note to open any result.",
+    inputSchema: {
+      type: "object",
+      properties: { path: { type: "string", description: "The note's vault path." } },
+      required: ["path"],
+    },
+  },
+  async run(input, ctx) {
+    const notePath = requirePath(input, "backlinks");
+    if (!ctx.backlinks) return "The backlinks index is unavailable here.";
+    const refs = ctx.backlinks(notePath);
+    return refs.length === 0 ? `No notes link to "${notePath}".` : formatRefs(refs);
+  },
+};
+
+const followLinks: Tool = {
+  spec: {
+    name: "follow_links",
+    description:
+      "List the notes a given note links TO (its outgoing wikilinks) — follow a " +
+      "thread from one note to the related notes it points at. Pass the note's " +
+      "path; then read_note to open any result.",
+    inputSchema: {
+      type: "object",
+      properties: { path: { type: "string", description: "The note's vault path." } },
+      required: ["path"],
+    },
+  },
+  async run(input, ctx) {
+    const notePath = requirePath(input, "follow_links");
+    if (!ctx.outgoingLinks) return "The link index is unavailable here.";
+    const refs = ctx.outgoingLinks(notePath);
+    return refs.length === 0 ? `"${notePath}" links to no other notes.` : formatRefs(refs);
+  },
+};
+
+const listRecent: Tool = {
+  spec: {
+    name: "list_recent",
+    description:
+      "List the user's most recently edited notes, newest first — useful when the " +
+      "question is about what they've been working on lately. Optional 'limit' " +
+      "(default 10). Then read_note to open any result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "How many notes to list (default 10)." },
+      },
+    },
+  },
+  async run(input, ctx) {
+    if (!ctx.recentNotes) return "The recent-notes index is unavailable here.";
+    const raw = asObject(input).limit;
+    const limit =
+      typeof raw === "number" && raw > 0 ? Math.min(Math.floor(raw), 25) : 10;
+    const refs = await ctx.recentNotes(limit);
+    return refs.length === 0 ? "No notes in the vault yet." : formatRefs(refs);
+  },
+};
+
 /** The agentic read tools, keyed by name. */
 export const AGENTIC_TOOLS: Record<string, Tool> = {
   search_vault: searchVault,
   deep_search: deepSearch,
   read_note: readNote,
+  backlinks: backlinks,
+  follow_links: followLinks,
+  list_recent: listRecent,
 };
 
 /** The ToolSpecs to offer the model this turn. */
