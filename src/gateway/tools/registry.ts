@@ -20,8 +20,14 @@ export interface ToolSearchHit {
 
 /** Vault capabilities the tools need, injected by the main wiring. */
 export interface ToolContext {
-  /** BM25 search over the vault (LexicalIndex), already top-k + gated. */
+  /** BM25 keyword search over the vault (LexicalIndex), already top-k + gated. */
   search(query: string, k: number): ToolSearchHit[];
+  /** Semantic (embedding) search over the vault — the deep_search engine. Async
+   *  because it embeds the query. Resolves to `null` when the vector index isn't
+   *  usable yet (still backfilling, empty, or the embed failed) so the tool can
+   *  tell the model to fall back to keyword search; `[]` means semantic ran but
+   *  found nothing. Optional: when absent, deep_search reports itself unavailable. */
+  semanticSearch?(query: string, k: number): Promise<ToolSearchHit[] | null>;
   /** Resolve a model-supplied note path to a safe ABSOLUTE vault path, or null
    *  if it escapes the vault or isn't a .md note (isInside + .md — 3A). */
   resolvePath(notePath: string): string | null;
@@ -50,6 +56,27 @@ function asObject(input: unknown): Record<string, unknown> {
   return input && typeof input === "object" ? (input as Record<string, unknown>) : {};
 }
 
+/** Format search hits into the numbered path › heading + snippet block shared by
+ *  search_vault (keyword) and deep_search (semantic), so both speak one language. */
+function formatHits(hits: ToolSearchHit[]): string {
+  return hits
+    .map((h, i) => {
+      const label = h.heading ? `${h.notePath} › ${h.heading}` : h.notePath;
+      const snippet = h.text.replace(/\s+/g, " ").trim().slice(0, SNIPPET_CHARS);
+      return `[${i + 1}] ${label}\n${snippet}`;
+    })
+    .join("\n\n");
+}
+
+/** Validate + extract a non-empty `query` string from a tool's input. */
+function requireQuery(input: unknown, tool: string): string {
+  const query = asObject(input).query;
+  if (typeof query !== "string" || query.trim().length === 0) {
+    throw new Error(`${tool} requires a non-empty 'query' string.`);
+  }
+  return query;
+}
+
 const searchVault: Tool = {
   spec: {
     name: "search_vault",
@@ -66,21 +93,51 @@ const searchVault: Tool = {
     },
   },
   async run(input, ctx) {
-    const query = asObject(input).query;
-    if (typeof query !== "string" || query.trim().length === 0) {
-      throw new Error("search_vault requires a non-empty 'query' string.");
-    }
+    const query = requireQuery(input, "search_vault");
     const hits = ctx.search(query, SEARCH_K);
     if (hits.length === 0) {
-      return `No notes matched "${query}".`;
+      return `No notes matched "${query}". If the question is conceptual, try deep_search (semantic search).`;
     }
-    return hits
-      .map((h, i) => {
-        const label = h.heading ? `${h.notePath} › ${h.heading}` : h.notePath;
-        const snippet = h.text.replace(/\s+/g, " ").trim().slice(0, SNIPPET_CHARS);
-        return `[${i + 1}] ${label}\n${snippet}`;
-      })
-      .join("\n\n");
+    return formatHits(hits);
+  },
+};
+
+const deepSearch: Tool = {
+  spec: {
+    name: "deep_search",
+    description:
+      "Semantic search over the user's note vault: finds notes related by MEANING, " +
+      "not just shared keywords. Reach for this when search_vault returns nothing " +
+      "useful, or when the question is conceptual or paraphrased and the relevant " +
+      "note may use different words than the query. Returns the same path, section " +
+      "heading, and snippet shape as search_vault; then read_note to read one in full.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "What to find, in natural language (meaning, not just keywords).",
+        },
+      },
+      required: ["query"],
+    },
+  },
+  async run(input, ctx) {
+    const query = requireQuery(input, "deep_search");
+    if (!ctx.semanticSearch) {
+      return "Semantic search is unavailable here. Use search_vault (keyword search) instead.";
+    }
+    const hits = await ctx.semanticSearch(query, SEARCH_K);
+    if (hits === null) {
+      return (
+        "The semantic index isn't ready yet (still building). " +
+        "Use search_vault (keyword search) for now."
+      );
+    }
+    if (hits.length === 0) {
+      return `No notes semantically matched "${query}".`;
+    }
+    return formatHits(hits);
   },
 };
 
@@ -146,6 +203,7 @@ const readNote: Tool = {
 /** The agentic read tools, keyed by name. */
 export const AGENTIC_TOOLS: Record<string, Tool> = {
   search_vault: searchVault,
+  deep_search: deepSearch,
   read_note: readNote,
 };
 

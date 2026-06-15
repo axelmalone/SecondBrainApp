@@ -389,3 +389,47 @@ describe("GroundingService incremental re-index (D2)", () => {
     expect(svc.status().notes).toBe(notesBefore); // unchanged, not dropped
   });
 });
+
+describe("GroundingService.searchSemantic (deep_search engine)", () => {
+  it("returns null before any vectors exist → caller falls back to keyword", async () => {
+    vault = await makeVault({ "a.md": "alpha apple" });
+    const svc = new GroundingService(new FakeEmbedder());
+    // No indexVault yet: index empty, so semantic is not usable.
+    expect(await svc.searchSemantic("apple", 5)).toBeNull();
+  });
+
+  it("returns semantic chunks once indexed", async () => {
+    vault = await makeVault({
+      "fruit.md": "alpha apple banana",
+      "garden.md": "soil compost mulch",
+    });
+    const svc = new GroundingService(new FakeEmbedder());
+    await svc.indexVault(vault);
+
+    const hits = await svc.searchSemantic("apple", 5);
+    expect(hits).not.toBeNull();
+    expect(hits!.some((c) => c.notePath.endsWith("fruit.md"))).toBe(true);
+  });
+
+  it("returns [] (not null) when indexed but nothing is relevant", async () => {
+    vault = await makeVault({ "a.md": "alpha apple banana" });
+    const svc = new GroundingService(new FakeEmbedder());
+    await svc.indexVault(vault);
+
+    // Disjoint tokens → cosine 0 → below minScore → no-matches → [].
+    const hits = await svc.searchSemantic("zzzz qqqq wwww", 5);
+    expect(hits).toEqual([]);
+  });
+
+  it("returns null when the query embed fails (semantic unusable)", async () => {
+    vault = await makeVault({ "a.md": "alpha apple" });
+    const embedder = new FakeEmbedder();
+    const svc = new GroundingService(embedder);
+    await svc.indexVault(vault);
+
+    embedder.embed = async () => {
+      throw new Error("model unavailable");
+    };
+    expect(await svc.searchSemantic("apple", 5)).toBeNull();
+  });
+});

@@ -826,16 +826,18 @@ $<HTMLButtonElement>("keep-both").addEventListener("click", () =>
 // only the active chat's plain transcript.
 // ---------------------------------------------------------------------------
 
-const providerBar = $<HTMLDivElement>("provider");
-const providerButtons = Array.from(
-  providerBar.querySelectorAll<HTMLButtonElement>("button[data-provider]")
-);
 const modelSelect = $<HTMLSelectElement>("model");
 const settingsToggle = $<HTMLButtonElement>("settings-toggle");
 const settingsPanel = $<HTMLElement>("settings");
-const keyState = $<HTMLDivElement>("key-state");
-const keyInput = $<HTMLInputElement>("key-input");
-const keySave = $<HTMLButtonElement>("key-save");
+const keyStoreNote = $<HTMLDivElement>("key-store-note");
+const keyInputs: Record<ProviderId, HTMLInputElement> = {
+  anthropic: $<HTMLInputElement>("key-input-anthropic"),
+  openai: $<HTMLInputElement>("key-input-openai"),
+};
+const keyStatuses: Record<ProviderId, HTMLSpanElement> = {
+  anthropic: $<HTMLSpanElement>("key-status-anthropic"),
+  openai: $<HTMLSpanElement>("key-status-openai"),
+};
 const personaInput = $<HTMLTextAreaElement>("persona-input");
 const personaSave = $<HTMLButtonElement>("persona-save");
 const bootstrapToggle = $<HTMLButtonElement>("bootstrap-toggle");
@@ -870,37 +872,58 @@ const currentChatTitleEl = $<HTMLSpanElement>("current-chat-title");
 const chatListPop = $<HTMLDivElement>("chat-list");
 const newChatBtn = $<HTMLButtonElement>("new-chat");
 
-// Curated model list per provider. First entry is the default selection.
-// Edit here to add/remove models — the dropdown is built from this.
+// Curated model list per provider, with a display label for the dropdown group.
+// One unified dropdown lists ALL models across providers — the provider is
+// derived from the chosen model (no separate provider selector). First entry
+// of the first group is the default selection.
 interface ModelOption {
   id: string;
   label: string;
 }
-const MODELS: Record<ProviderId, ModelOption[]> = {
-  anthropic: [
-    { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
-    { id: "claude-opus-4-6", label: "Claude Opus 4.6" },
-    { id: "claude-sonnet-4-5-20250929", label: "Claude Sonnet 4.5" },
-    { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
-  ],
-  openai: [
-    { id: "gpt-4o", label: "GPT-4o" },
-    { id: "gpt-4o-mini", label: "GPT-4o mini" },
-    { id: "gpt-4-turbo", label: "GPT-4 Turbo" },
-    { id: "o1", label: "o1" },
-    { id: "o1-mini", label: "o1-mini" },
-  ],
-};
+const MODEL_GROUPS: { provider: ProviderId; label: string; models: ModelOption[] }[] = [
+  {
+    provider: "anthropic",
+    label: "Claude (Anthropic)",
+    models: [
+      { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
+      { id: "claude-opus-4-6", label: "Claude Opus 4.6" },
+      { id: "claude-sonnet-4-5-20250929", label: "Claude Sonnet 4.5" },
+      { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
+    ],
+  },
+  {
+    provider: "openai",
+    label: "OpenAI",
+    models: [
+      { id: "gpt-4o", label: "GPT-4o" },
+      { id: "gpt-4o-mini", label: "GPT-4o mini" },
+      { id: "gpt-4-turbo", label: "GPT-4 Turbo" },
+      { id: "o1", label: "o1" },
+      { id: "o1-mini", label: "o1-mini" },
+    ],
+  },
+];
 
-// Rebuild the dropdown for a provider; the browser selects the first option,
-// which is our intended default.
-function populateModels(id: ProviderId): void {
+// Reverse lookup: model id → its provider, so the gateway call is routed without
+// a separate provider control.
+const MODEL_PROVIDER: Record<string, ProviderId> = Object.fromEntries(
+  MODEL_GROUPS.flatMap((g) => g.models.map((m) => [m.id, g.provider]))
+);
+
+// Build the single dropdown, one <optgroup> per provider. The browser selects
+// the first option, our intended default.
+function populateModelDropdown(): void {
   modelSelect.replaceChildren();
-  for (const m of MODELS[id]) {
-    const opt = document.createElement("option");
-    opt.value = m.id;
-    opt.textContent = m.label;
-    modelSelect.appendChild(opt);
+  for (const g of MODEL_GROUPS) {
+    const group = document.createElement("optgroup");
+    group.label = g.label;
+    for (const m of g.models) {
+      const opt = document.createElement("option");
+      opt.value = m.id;
+      opt.textContent = m.label;
+      group.appendChild(opt);
+    }
+    modelSelect.appendChild(group);
   }
 }
 
@@ -911,29 +934,14 @@ const transcript: ChatMessage[] = [];
 let chatSummaries: ChatSummary[] = [];
 let configured: ProviderId[] = [];
 let sending = false;
-let providerId: ProviderId = "anthropic";
 
+// The provider is whatever the currently-selected model belongs to.
 function currentProvider(): ProviderId {
-  return providerId;
+  return MODEL_PROVIDER[modelSelect.value] ?? "anthropic";
 }
 
-// Segmented provider control. Selecting a provider updates the .on highlight,
-// rebuilds the model dropdown for that provider, and refreshes the key status.
-function setProvider(id: ProviderId): void {
-  providerId = id;
-  for (const btn of providerButtons) {
-    btn.classList.toggle("on", btn.dataset.provider === id);
-  }
-  populateModels(id);
-  void refreshAiStatus();
-}
-
-for (const btn of providerButtons) {
-  btn.addEventListener("click", () => {
-    const id = btn.dataset.provider as ProviderId;
-    if (id !== providerId) setProvider(id);
-  });
-}
+// Switching model may switch provider — refresh which key is shown as active.
+modelSelect.addEventListener("change", () => void refreshAiStatus());
 
 function humanError(err: SafeError): string {
   switch (err.variant) {
@@ -1308,11 +1316,19 @@ async function refreshGroundingStatus(): Promise<void> {
     indexBtn.classList.remove("cta");
     indexBtn.textContent = "Re-index";
   } else {
+    // Indexing is automatic now: the deep (semantic) index starts on its own
+    // shortly after a vault opens, while keyword/agentic search is already live.
+    // So this is a brief transitional state — keep polling so the line flips to
+    // live progress when the background embed begins, rather than leaving a stale
+    // CTA beside a silently-running index. The button stays as an opt-in to start
+    // the embed immediately instead of waiting for the auto-start.
     groundDot.classList.remove("on");
-    groundState.textContent = "Index your vault so answers can use your notes";
+    groundState.textContent = "Preparing your vault — keyword search is live now";
     indexBtn.hidden = false;
     indexBtn.classList.add("cta");
-    indexBtn.textContent = "Index your vault";
+    indexBtn.textContent = "Index now";
+    if (groundingPoll) clearTimeout(groundingPoll);
+    groundingPoll = setTimeout(() => void refreshGroundingStatus(), 1000);
   }
   // The status line truncates in the narrow chat column; mirror it into a
   // tooltip so the full text is readable on hover.
@@ -1352,21 +1368,27 @@ indexBtn.addEventListener("click", async () => {
   await refreshGroundingStatus();
 });
 
+const PROVIDERS: ProviderId[] = ["anthropic", "openai"];
+
 async function refreshAiStatus(): Promise<void> {
   const status = await window.secondBrain.aiStatus();
   configured = status.configured;
-  const provider = currentProvider();
-  const has = configured.includes(provider);
   if (status.keyStoreState === "locked") {
-    keyState.textContent =
+    keyStoreNote.textContent =
       "Key store locked (OS keychain unavailable). Keys can't be saved on this machine.";
   } else if (status.keyStoreState === "tampered") {
-    keyState.textContent =
+    keyStoreNote.textContent =
       "Key store file is corrupt. Saving a new key will replace it.";
   } else {
-    keyState.textContent = has
-      ? `A key is configured for ${provider}.`
-      : `No key configured for ${provider}.`;
+    keyStoreNote.textContent = "";
+  }
+  const active = currentProvider();
+  for (const p of PROVIDERS) {
+    const has = configured.includes(p);
+    const label = has ? "Configured ✓" : "Not set";
+    const activeTag = p === active ? " · in use" : "";
+    keyStatuses[p].textContent = has ? label + activeTag : label;
+    keyStatuses[p].classList.toggle("ok", has);
   }
 }
 
@@ -1452,20 +1474,26 @@ focusBtn.addEventListener("click", () => {
   void send();
 });
 
-keySave.addEventListener("click", async () => {
-  const key = keyInput.value.trim();
-  if (!key) return;
-  keySave.disabled = true;
-  const res = await window.secondBrain.aiSetKey(currentProvider(), key);
-  keySave.disabled = false;
-  if (res.ok) {
-    keyInput.value = "";
-    setStatus(`Saved key for ${currentProvider()}.`);
-    await refreshAiStatus();
-  } else {
-    keyState.textContent = `Couldn't save key: ${humanError(res.error)}`;
-  }
-});
+for (const btn of Array.from(
+  document.querySelectorAll<HTMLButtonElement>(".key-save")
+)) {
+  const provider = btn.dataset.provider as ProviderId;
+  btn.addEventListener("click", async () => {
+    const input = keyInputs[provider];
+    const key = input.value.trim();
+    if (!key) return;
+    btn.disabled = true;
+    const res = await window.secondBrain.aiSetKey(provider, key);
+    btn.disabled = false;
+    if (res.ok) {
+      input.value = "";
+      setStatus(`Saved ${provider === "anthropic" ? "Claude" : "OpenAI"} API key.`);
+      await refreshAiStatus();
+    } else {
+      keyStoreNote.textContent = `Couldn't save key: ${humanError(res.error)}`;
+    }
+  });
+}
 
 async function send(): Promise<void> {
   const text = promptEl.value.trim();
@@ -1581,9 +1609,87 @@ async function initChats(): Promise<void> {
   else await newChat();
 }
 
-populateModels(providerId);
+// ── Resizable panes ─────────────────────────────────────────────────────────
+// Drag either gutter to resize a side pane; the editor flexes to fill the rest.
+// Sizes persist across launches; double-click a gutter to reset it to default.
+function setupPaneResize(): void {
+  const grid = document.querySelector<HTMLElement>(".grid");
+  if (!grid) return;
+  const GUTTER = 16; // .gutter column width
+  const PADDING = 32; // .grid left+right padding
+  const EDITOR_MIN = 320; // never let the editor starve below this
+  const PANES = {
+    left: { varName: "--col-left", def: 240, min: 160, max: 460, otherVar: "--col-right", otherDef: 380 },
+    right: { varName: "--col-right", def: 380, min: 300, max: 640, otherVar: "--col-left", otherDef: 240 },
+  } as const;
+  type Side = keyof typeof PANES;
+
+  const readVar = (name: string, fallback: number): number => {
+    const v = parseFloat(getComputedStyle(grid).getPropertyValue(name));
+    return Number.isFinite(v) && v > 0 ? v : fallback;
+  };
+
+  let saved: { left?: number; right?: number } = {};
+  try {
+    saved = JSON.parse(localStorage.getItem("sb.paneSizes") ?? "{}");
+  } catch {
+    saved = {};
+  }
+  if (typeof saved.left === "number") grid.style.setProperty("--col-left", `${saved.left}px`);
+  if (typeof saved.right === "number") grid.style.setProperty("--col-right", `${saved.right}px`);
+  const persist = (): void => localStorage.setItem("sb.paneSizes", JSON.stringify(saved));
+
+  const wire = (gutter: HTMLElement, side: Side): void => {
+    const p = PANES[side];
+    gutter.addEventListener("pointerdown", (e: PointerEvent) => {
+      e.preventDefault();
+      gutter.classList.add("dragging");
+      document.body.classList.add("resizing");
+      gutter.setPointerCapture(e.pointerId);
+      const startX = e.clientX;
+      const startW = readVar(p.varName, p.def);
+
+      const onMove = (ev: PointerEvent): void => {
+        const dx = ev.clientX - startX;
+        // left gutter: drag right → wider left pane. right gutter: drag right → narrower right pane.
+        let next = side === "left" ? startW + dx : startW - dx;
+        // When the sidebar is collapsed its real width is 0 regardless of the var.
+        const collapsed = document.body.classList.contains("side-collapsed");
+        const otherW = side === "right" && collapsed ? 0 : readVar(p.otherVar, p.otherDef);
+        const maxForEditor = grid.clientWidth - PADDING - otherW - 2 * GUTTER - EDITOR_MIN;
+        next = Math.max(p.min, Math.min(p.max, maxForEditor, next));
+        grid.style.setProperty(p.varName, `${next}px`);
+      };
+      const onUp = (): void => {
+        gutter.classList.remove("dragging");
+        document.body.classList.remove("resizing");
+        gutter.removeEventListener("pointermove", onMove);
+        saved[side] = Math.round(readVar(p.varName, p.def));
+        persist();
+      };
+      gutter.addEventListener("pointermove", onMove);
+      gutter.addEventListener("pointerup", onUp, { once: true });
+      gutter.addEventListener("pointercancel", onUp, { once: true });
+    });
+
+    // Double-click resets this pane to its default width.
+    gutter.addEventListener("dblclick", () => {
+      grid.style.removeProperty(p.varName);
+      delete saved[side];
+      persist();
+    });
+  };
+
+  const left = document.getElementById("gutter-left");
+  const right = document.getElementById("gutter-right");
+  if (left) wire(left, "left");
+  if (right) wire(right, "right");
+}
+
+populateModelDropdown();
 void refreshAiStatus();
 void refreshVault();
 void initChats();
 void refreshProposals();
 void refreshPersonaNudge();
+setupPaneResize();

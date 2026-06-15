@@ -7,6 +7,7 @@ import {
 } from "../src/gateway/tools/registry.js";
 
 const search_vault = AGENTIC_TOOLS.search_vault!;
+const deep_search = AGENTIC_TOOLS.deep_search!;
 const read_note = AGENTIC_TOOLS.read_note!;
 
 /** A ToolContext stub: an in-memory vault keyed by absolute path. resolvePath
@@ -49,6 +50,45 @@ describe("search_vault", () => {
   it("reports no matches plainly (never fabricates)", async () => {
     const ctx = stubCtx({ "/vault/a.md": "pricing" });
     expect(await search_vault.run({ query: "submarine" }, ctx)).toContain("No notes matched");
+  });
+});
+
+describe("deep_search (semantic)", () => {
+  it("formats semantic hits like search_vault", async () => {
+    const ctx = stubCtx(
+      {},
+      {
+        semanticSearch: async (): Promise<ToolSearchHit[]> => [
+          { notePath: "/vault/momentum.md", heading: "Long projects", text: "sustaining momentum through the messy middle" },
+        ],
+      }
+    );
+    const out = await deep_search.run({ query: "how do I stay motivated" }, ctx);
+    expect(out).toContain("/vault/momentum.md › Long projects");
+    expect(out).toContain("sustaining momentum");
+  });
+
+  it("falls back to keyword search when the vector index isn't ready (null)", async () => {
+    const ctx = stubCtx({}, { semanticSearch: async () => null });
+    const out = await deep_search.run({ query: "anything" }, ctx);
+    expect(out).toMatch(/isn't ready|search_vault/);
+  });
+
+  it("reports no semantic matches plainly (never fabricates)", async () => {
+    const ctx = stubCtx({}, { semanticSearch: async (): Promise<ToolSearchHit[]> => [] });
+    expect(await deep_search.run({ query: "submarine" }, ctx)).toContain("No notes semantically matched");
+  });
+
+  it("reports unavailable when the context offers no semantic search", async () => {
+    const ctx = stubCtx({ "/vault/a.md": "x" }); // no semanticSearch wired
+    const out = await deep_search.run({ query: "x" }, ctx);
+    expect(out).toMatch(/unavailable|search_vault/);
+  });
+
+  it("validates the query (empty throws)", async () => {
+    const ctx = stubCtx({}, { semanticSearch: async () => [] });
+    await expect(deep_search.run({ query: "  " }, ctx)).rejects.toThrow(/non-empty/);
+    await expect(deep_search.run({}, ctx)).rejects.toThrow(/query/);
   });
 });
 

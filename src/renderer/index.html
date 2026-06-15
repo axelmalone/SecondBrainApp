@@ -169,21 +169,55 @@
         color: var(--text);
       }
 
-      /* three-card grid: vault tree | editor | chat */
+      /* three-card grid: vault tree | gutter | editor (flex) | gutter | chat.
+         Pane widths are CSS vars so the drag handles can resize them live; the
+         editor flexes to absorb the difference. The 16px gutter columns ARE the
+         old card gap, now doubling as the drag targets. */
       .grid {
         flex: 1;
         display: grid;
-        grid-template-columns: 240px 1fr 380px;
-        gap: 16px;
+        --gutter-w: 16px;
+        grid-template-columns:
+          var(--col-left, 240px) var(--gutter-w) 1fr var(--gutter-w)
+          var(--col-right, 380px);
+        gap: 0;
         padding: 0 16px 14px;
         min-height: 0;
       }
       body.side-collapsed .grid {
-        grid-template-columns: 0 1fr 380px;
-        gap: 0 16px;
+        grid-template-columns: 0 0 1fr var(--gutter-w) var(--col-right, 380px);
       }
-      body.side-collapsed .sidebar {
+      body.side-collapsed .sidebar,
+      body.side-collapsed #gutter-left {
         display: none;
+      }
+      /* drag handle in the gap between two cards: the whole 16px gap is the hit
+         target; a hairline brightens to the accent on hover/drag so it reads as
+         grabbable without adding chrome. */
+      .gutter {
+        position: relative;
+        cursor: col-resize;
+        touch-action: none;
+      }
+      .gutter::after {
+        content: "";
+        position: absolute;
+        top: 10px;
+        bottom: 10px;
+        left: 50%;
+        width: 2px;
+        transform: translateX(-50%);
+        border-radius: 2px;
+        background: transparent;
+        transition: background 0.15s ease;
+      }
+      .gutter:hover::after,
+      .gutter.dragging::after {
+        background: var(--accent);
+      }
+      body.resizing {
+        cursor: col-resize;
+        user-select: none;
       }
       .card {
         background: var(--card);
@@ -814,12 +848,50 @@
         display: flex;
         gap: 8px;
       }
-      #key-state {
+      .settings-title {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--text-2);
+        margin-top: 4px;
+      }
+      .settings-title:first-child {
+        margin-top: 0;
+      }
+      .settings-note {
         font-size: 12px;
         color: var(--text-2);
       }
-      #key-input {
+      .settings-note:empty {
+        display: none;
+      }
+      .key-row {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .key-row-head {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+      }
+      .key-row-label {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text);
+      }
+      .key-status {
+        margin-left: auto;
+        font-size: 11px;
+        color: var(--text-2);
+      }
+      .key-status.ok {
+        color: var(--accent);
+      }
+      .key-input {
         flex: 1;
+        min-width: 0;
         font: inherit;
         font-size: 13px;
         padding: 7px 10px;
@@ -829,10 +901,10 @@
         color: var(--text);
         outline: none;
       }
-      #key-input:focus {
+      .key-input:focus {
         border-color: var(--accent);
       }
-      #key-save,
+      .key-save,
       #persona-save {
         border: none;
         background: var(--accent);
@@ -1324,6 +1396,16 @@
         <div class="search-results" id="search-results" hidden></div>
       </section>
 
+      <!-- drag handle: resize the vault sidebar -->
+      <div
+        class="gutter"
+        id="gutter-left"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize vault sidebar"
+        title="Drag to resize"
+      ></div>
+
       <!-- editor card -->
       <section class="card">
         <div class="ed-head">
@@ -1357,6 +1439,16 @@
         </section>
       </section>
 
+      <!-- drag handle: resize the chat panel -->
+      <div
+        class="gutter"
+        id="gutter-right"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize chat panel"
+        title="Drag to resize"
+      ></div>
+
       <!-- chat card -->
       <section class="card">
         <div class="chat-head">
@@ -1369,25 +1461,49 @@
         </div>
 
         <div class="chat-top">
-          <div class="segmented" id="provider">
-            <button data-provider="anthropic" class="on">Anthropic</button>
-            <button data-provider="openai">OpenAI</button>
-          </div>
-          <select id="model"></select>
-          <button id="settings-toggle" class="key-btn" title="API keys">Key</button>
+          <select id="model" title="Model"></select>
+          <button id="settings-toggle" class="key-btn" title="Settings & API keys">⚙&#xFE0E; Settings</button>
         </div>
 
         <section id="settings">
-          <div id="key-state">Checking key store…</div>
-          <div class="row">
-            <input
-              id="key-input"
-              type="password"
-              placeholder="Paste API key for the selected provider"
-              spellcheck="false"
-            />
-            <button id="key-save">Save key</button>
+          <div class="settings-title">API keys</div>
+          <div id="key-store-note" class="settings-note"></div>
+          <div class="key-row">
+            <div class="key-row-head">
+              <span class="key-row-label">Claude (Anthropic)</span>
+              <span class="key-status" id="key-status-anthropic">…</span>
+            </div>
+            <div class="row">
+              <input
+                id="key-input-anthropic"
+                class="key-input"
+                type="password"
+                placeholder="sk-ant-…"
+                spellcheck="false"
+                autocomplete="off"
+              />
+              <button class="key-save" data-provider="anthropic">Save</button>
+            </div>
           </div>
+          <div class="key-row">
+            <div class="key-row-head">
+              <span class="key-row-label">OpenAI</span>
+              <span class="key-status" id="key-status-openai">…</span>
+            </div>
+            <div class="row">
+              <input
+                id="key-input-openai"
+                class="key-input"
+                type="password"
+                placeholder="sk-…"
+                spellcheck="false"
+                autocomplete="off"
+              />
+              <button class="key-save" data-provider="openai">Save</button>
+            </div>
+          </div>
+
+          <div class="settings-title">Assistant profile</div>
           <div id="persona-hint">
             How your assistant should think about you. Used until an
             <code>_assistant.md</code> exists at your vault root.
