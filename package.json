@@ -1,5 +1,6 @@
 {
   "name": "second-brain-app",
+  "productName": "Second Brain",
   "version": "0.1.0",
   "private": true,
   "description": "AI-native, local-first second brain — M1 vault I/O layer",
